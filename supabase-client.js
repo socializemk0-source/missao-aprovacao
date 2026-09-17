@@ -220,12 +220,40 @@ export function subscribeAuth(callback) {
 // localStorage é só otimização de UX e nunca decide autorização real.
 // -----------------------------------------------------------------------
 
-export async function upgradeUserPlan(newPlan = 'pro', paymentMethod = 'pix_instantaneo') {
-  const safePlan = newPlan === 'pro' ? 'pro' : 'free';
+// Só existe um jeito de virar PRO: pagar via Mercado Pago. Cria a
+// preferência de checkout autenticada (o servidor usa req.user.uid — o
+// que a gente manda aqui não importa) e redireciona para lá. O plano só
+// muda de verdade quando o webhook confirmar o pagamento no servidor.
+export async function startProCheckout() {
+  const res = await authFetch('/api/payments', { method: 'POST', body: JSON.stringify({}) });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || !payload.success || !payload.checkoutUrl) {
+    throw new Error(payload.error || 'Não foi possível iniciar o pagamento. Tente novamente.');
+  }
+  window.location.href = payload.checkoutUrl;
+}
+
+// Busca o plano/perfil de verdade no servidor (nunca confia em
+// localStorage nem em query params do retorno do checkout) e atualiza o
+// cache local de UX.
+export async function refreshPlanFromServer() {
+  const res = await authFetch('/api/auth?action=get-profile');
+  const payload = await res.json().catch(() => ({}));
+  if (payload?.profile) {
+    const current = getCurrentUser();
+    persistUser({ ...(current || {}), ...payload.profile });
+  }
+  return payload?.profile || null;
+}
+
+export async function upgradeUserPlan(newPlan = 'pro') {
+  if (newPlan === 'pro') {
+    return startProCheckout(); // navega para o Mercado Pago — não retorna
+  }
 
   const res = await authFetch('/api/auth', {
     method: 'POST',
-    body: JSON.stringify({ action: 'upgrade-plan', plan: safePlan, paymentMethod }),
+    body: JSON.stringify({ action: 'downgrade-to-free' }),
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok || !payload.success) {
@@ -233,11 +261,9 @@ export async function upgradeUserPlan(newPlan = 'pro', paymentMethod = 'pix_inst
   }
 
   const current = getCurrentUser();
-  if (current) {
-    persistUser({ ...current, plan: payload.plan, planPrice: payload.planPrice });
-  }
+  if (current) persistUser({ ...current, plan: payload.plan, planPrice: payload.planPrice });
   localStorage.setItem('missao_aprovacao_plan', payload.plan);
-  window.dispatchEvent(new CustomEvent('plan_state_changed', { detail: { plan: payload.plan, planPrice: payload.planPrice, paymentMethod } }));
+  window.dispatchEvent(new CustomEvent('plan_state_changed', { detail: { plan: payload.plan, planPrice: payload.planPrice } }));
 
   return { success: true, plan: payload.plan, planPrice: payload.planPrice };
 }
@@ -510,6 +536,8 @@ const SupabaseApplet = {
   loginWithEmail,
   getCurrentUser,
   upgradeUserPlan,
+  startProCheckout,
+  refreshPlanFromServer,
   getUserPlan,
   loginWithGoogle,
   loginGuest,

@@ -158,3 +158,24 @@ test('11. GET /api/data sem action, autenticado → nunca inclui texto de redaç
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.essays, undefined, 'o dump agregado não deve mais expor o array de redações de terceiros');
 });
+
+// ---------------------------------------------------------------------
+// 12-13. HIGH-1 — só o webhook de pagamento pode conceder o plano PRO
+// ---------------------------------------------------------------------
+
+test('12. /api/auth não deixa mais nenhum usuário autenticado se autopromover a PRO', async () => {
+  const req = makeReq({ body: { action: 'upgrade-plan', plan: 'pro' }, headers: authHeader('user_A') });
+  const res = makeRes();
+  await authHandler(req, res);
+  assert.equal(res.statusCode, 403);
+  assert.notEqual(store.users.user_A.plan, 'pro');
+});
+
+test('13. downgrade-to-free continua funcionando normalmente (autosserviço, sem risco)', async () => {
+  store.users.user_A.plan = 'pro';
+  const req = makeReq({ body: { action: 'downgrade-to-free' }, headers: authHeader('user_A') });
+  const res = makeRes();
+  await authHandler(req, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.users.user_A.plan, 'free');
+});

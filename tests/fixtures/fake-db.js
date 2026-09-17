@@ -25,6 +25,7 @@ export function createStore() {
       user_A: [],
       user_B: [],
     },
+    payments: [], // { mpPaymentId, userId, status, ... }
   };
 }
 
@@ -74,5 +75,16 @@ export function buildNamedExports(store) {
     getDailyMissions: async () => [],
     recordViewedTipInDb: async () => ({}),
     getViewedTipsByUserId: async (userId) => store.tips[userId] || [],
+
+    // usados por api/payments.js
+    getPaymentByMpId: async (mpPaymentId) => store.payments.find((p) => p.mpPaymentId === mpPaymentId) || null,
+    recordPayment: async (data) => {
+      if (store.payments.some((p) => p.mpPaymentId === data.mpPaymentId)) {
+        return null; // onConflictDoNothing real correspondente
+      }
+      const record = { ...data };
+      store.payments.push(record);
+      return record;
+    },
   };
 }

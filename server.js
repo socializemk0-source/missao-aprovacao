@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import redacaoHandler from './api/redacao.js';
 import authHandler from './api/auth.js';
 import dataHandler from './api/data.js';
+import paymentsHandler from './api/payments.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,6 +101,12 @@ app.all('/api/redacao', redacaoLimiter, (req, res) => {
 // API de dados da plataforma (progresso, redações, ranking) — PostgreSQL
 app.use('/api/data', apiGeneralLimiter, (req, res) => {
   dataHandler(req, res);
+});
+
+// Pagamentos (Mercado Pago / Checkout Pro) — criação de preferência (autenticada)
+// e webhook de confirmação (público, protegido por assinatura HMAC própria)
+app.use('/api/payments', apiGeneralLimiter, (req, res) => {
+  paymentsHandler(req, res);
 });
 
 // Configuração pública do Supabase Client para inicialização no navegador

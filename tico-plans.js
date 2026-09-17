@@ -71,42 +71,91 @@
       return this.getPlan() === 'pro';
     },
 
-    async setPlan(newPlan, paymentMethod = 'pix_instantaneo') {
-      const safePlan = newPlan === 'pro' ? 'pro' : 'free';
-      localStorage.setItem('missao_aprovacao_plan', safePlan);
-
-      // Atualizar objeto do usuário no localStorage
-      try {
-        const userRaw = localStorage.getItem('missao_aprovacao_auth_user');
-        if (userRaw) {
-          const user = JSON.parse(userRaw);
-          user.plan = safePlan;
-          user.planPrice = PLAN_CONFIG.price;
-          if (safePlan === 'pro') {
-            user.proActivatedAt = new Date().toISOString();
-          }
-          localStorage.setItem('missao_aprovacao_auth_user', JSON.stringify(user));
-          localStorage.setItem('missao_aprovacao_user_profile', JSON.stringify(user));
+    // Virar PRO: redireciona para o checkout real do Mercado Pago (a
+    // página navega para fora — nada aqui "ativa" nada de fato; só o
+    // webhook confirmado no servidor faz isso, ver api/payments.js).
+    // Voltar para grátis: autosserviço direto, sem risco de segurança.
+    async setPlan(newPlan) {
+      if (newPlan === 'pro') {
+        if (!window.MissaoFirebase || typeof window.MissaoFirebase.startProCheckout !== 'function') {
+          throw new Error('Pagamento indisponível no momento. Tente novamente em instantes.');
         }
-      } catch (_) {}
-
-      // Sincronizar com Firebase se disponível
-      if (window.MissaoFirebase && typeof window.MissaoFirebase.upgradeUserPlan === 'function') {
-        try {
-          await window.MissaoFirebase.upgradeUserPlan(safePlan, paymentMethod);
-        } catch (e) {
-          console.warn('[TicoPlan] Erro ao sincronizar com Firebase:', e);
-        }
+        await window.MissaoFirebase.startProCheckout(); // navega para o Mercado Pago
+        return true;
       }
 
-      // Notificar a aplicação
-      window.dispatchEvent(new CustomEvent('plan_state_changed', {
-        detail: { plan: safePlan, planPrice: PLAN_CONFIG.price, paymentMethod }
-      }));
-
-      // Atualizar interface imediatamente
+      if (window.MissaoFirebase && typeof window.MissaoFirebase.upgradeUserPlan === 'function') {
+        await window.MissaoFirebase.upgradeUserPlan('free');
+      }
+      localStorage.setItem('missao_aprovacao_plan', 'free');
+      window.dispatchEvent(new CustomEvent('plan_state_changed', { detail: { plan: 'free', planPrice: PLAN_CONFIG.price } }));
       this.updateUI();
       return true;
+    },
+
+    // Ao voltar do checkout do Mercado Pago (?payment=success|pending|failure),
+    // NUNCA confia nesse parâmetro (é controlável pelo usuário) — busca o
+    // plano real no servidor e só então reflete na interface.
+    async checkPaymentReturn() {
+      const params = new URLSearchParams(window.location.search);
+      const status = params.get('payment');
+      if (!status) return;
+
+      const url = new URL(window.location.href);
+      url.searchParams.delete('payment');
+      history.replaceState({}, '', url.pathname + url.search + url.hash);
+
+      if (status === 'failure') {
+        this.openModal('details', 'O pagamento não foi concluído. Você pode tentar novamente quando quiser.');
+        return;
+      }
+
+      if (!window.MissaoFirebase || typeof window.MissaoFirebase.refreshPlanFromServer !== 'function') return;
+
+      // O webhook pode chegar alguns segundos depois do redirecionamento
+      // de volta — tenta algumas vezes antes de desistir.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        let profile = null;
+        try {
+          profile = await window.MissaoFirebase.refreshPlanFromServer();
+        } catch (_) {}
+
+        if (profile?.plan === 'pro') {
+          this.updateUI();
+          this.openModal('details');
+          const inner = document.querySelector('#tico-plan-modal-inner');
+          if (inner) {
+            inner.innerHTML = `
+              <div class="tico-plan-success-splash">
+                <div class="tico-success-icon">🎉👑</div>
+                <h2>Parabéns, Concurseiro PRO!</h2>
+                <p>Seu <strong>Passaporte Aprovação PRO (R$ 29,90)</strong> foi confirmado e ativado.</p>
+                <div class="tico-success-unlocked-card">
+                  <ul>
+                    <li>✓ Vidas Infinitas (∞) desbloqueadas</li>
+                    <li>✓ Acesso integral aos 37 Capítulos e 111 Fases</li>
+                    <li>✓ Oficina de Redação Ilimitada com IA ativada</li>
+                    <li>✓ Selo Dourado PRO adicionado ao seu perfil</li>
+                  </ul>
+                </div>
+                <button type="button" class="tico-plan-confirm-btn" id="tico-close-and-enjoy-btn">
+                  Bora Estudar com Vidas Infinitas! 🚀
+                </button>
+              </div>
+            `;
+            inner.querySelector('#tico-close-and-enjoy-btn')?.addEventListener('click', () => this.closeModal());
+          }
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      if (status === 'pending') {
+        this.openModal('details', 'Seu pagamento está em análise. Assim que for aprovado o PRO libera automaticamente — pode continuar estudando enquanto isso.');
+      } else {
+        this.openModal('details', 'Estamos confirmando seu pagamento com o Mercado Pago. Se a confirmação demorar mais que alguns minutos, atualize a página.');
+      }
     },
 
     openModal(preferredTab = 'details', customMessage = '') {
@@ -424,62 +473,14 @@
           </div>
         </div>
 
-        <!-- Área de Checkout e Simulação de Pagamento -->
+        <!-- Área de Checkout: redireciona para o Checkout Pro do Mercado Pago -->
         <div class="tico-plan-checkout-section" id="tico-plan-checkout-area">
-          <h4 class="tico-plan-checkout-title">Forma de Pagamento (Ativação Instantânea)</h4>
-          
-          <div class="tico-checkout-tabs">
-            <button type="button" class="tico-checkout-tab active" data-method="pix">
-              <span>⚡ PIX (Liberação Imediata)</span>
-            </button>
-            <button type="button" class="tico-checkout-tab" data-method="cartao">
-              <span>💳 Cartão de Crédito</span>
-            </button>
-          </div>
-
-          <div class="tico-checkout-method-body" id="tico-method-pix">
-            <div class="tico-pix-box">
-              <div class="tico-pix-qr-sim">
-                <div class="tico-qr-placeholder">
-                  <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#1a4d6f" stroke-width="1.8">
-                    <rect x="3" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="14" width="7" height="7"></rect>
-                    <rect x="14" y="3" width="7" height="7"></rect>
-                    <rect x="3" y="14" width="7" height="7"></rect>
-                    <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    <line x1="17" y1="7" x2="17.01" y2="7"></line>
-                    <line x1="7" y1="17" x2="7.01" y2="17"></line>
-                    <line x1="17" y1="17" x2="17.01" y2="17"></line>
-                  </svg>
-                  <span>QR Code PIX</span>
-                </div>
-              </div>
-              <div class="tico-pix-info">
-                <p class="tico-pix-val">Valor único com desconto: <strong>R$ 29,90</strong></p>
-                <div class="tico-pix-code-field">
-                  <input type="text" readonly value="00020126580014br.gov.bcb.pix0136missao-aprovacao-pro-2990-chave-pix520400005303986540529.905802BR" id="tico-pix-copy-input">
-                  <button type="button" class="tico-copy-btn" id="tico-copy-pix-btn">Copiar Código</button>
-                </div>
-                <small class="tico-pix-tip">A liberação do Plano PRO é automática e imediata após o pagamento.</small>
-              </div>
-            </div>
-          </div>
-
-          <div class="tico-checkout-method-body hidden" id="tico-method-cartao">
-            <div class="tico-card-sim-form">
-              <div class="tico-card-field-row">
-                <input type="text" placeholder="Número do Cartão (0000 0000 0000 0000)" maxlength="19" class="tico-card-input">
-              </div>
-              <div class="tico-card-field-grid">
-                <input type="text" placeholder="Nome Impresso" class="tico-card-input">
-                <input type="text" placeholder="MM/AA" maxlength="5" class="tico-card-input">
-                <input type="text" placeholder="CVV" maxlength="4" class="tico-card-input">
-              </div>
-              <div class="tico-card-installments">
-                <label>Parcelamento: <strong>1x de R$ 29,90 sem juros</strong></label>
-              </div>
-            </div>
-          </div>
+          <h4 class="tico-plan-checkout-title">Pagamento via Mercado Pago</h4>
+          <p class="tico-plan-checkout-desc">
+            Ao clicar em ativar, você será redirecionado para o ambiente seguro do Mercado Pago
+            (PIX, cartão de crédito ou boleto). O Plano PRO é liberado automaticamente assim que
+            o pagamento for confirmado — nenhum dado de cartão passa por este site.
+          </p>
 
           <!-- Botões de Ação do Checkout -->
           <div class="tico-plan-actions-bar">
@@ -502,42 +503,6 @@
         </div>
       `;
 
-      // Eventos dos botões de tabs de pagamento
-      const tabBtns = inner.querySelectorAll('.tico-checkout-tab');
-      tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-          tabBtns.forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          const method = btn.dataset.method;
-          const pixBody = inner.querySelector('#tico-method-pix');
-          const cartaoBody = inner.querySelector('#tico-method-cartao');
-          if (method === 'pix') {
-            pixBody.classList.remove('hidden');
-            cartaoBody.classList.add('hidden');
-          } else {
-            pixBody.classList.add('hidden');
-            cartaoBody.classList.remove('hidden');
-          }
-        });
-      });
-
-      // Botão Copiar PIX
-      const copyBtn = inner.querySelector('#tico-copy-pix-btn');
-      if (copyBtn) {
-        copyBtn.addEventListener('click', () => {
-          const input = inner.querySelector('#tico-pix-copy-input');
-          if (input) {
-            input.select();
-            navigator.clipboard?.writeText(input.value).then(() => {
-              copyBtn.textContent = 'Copiado! ✓';
-              setTimeout(() => { copyBtn.textContent = 'Copiar Código'; }, 2000);
-            }).catch(() => {
-              copyBtn.textContent = 'Copiado!';
-            });
-          }
-        });
-      }
-
       // Botão Scroll para Checkout
       const openCheckoutBtn = inner.querySelector('#tico-open-checkout-btn');
       if (openCheckoutBtn) {
@@ -549,38 +514,19 @@
         });
       }
 
-      // Botão Ativar PRO (Instantâneo para demonstração/teste e persistência real)
+      // Botão Ativar PRO — redireciona para o checkout real do Mercado Pago.
       const confirmBtn = inner.querySelector('#tico-confirm-pro-btn');
       if (confirmBtn) {
         confirmBtn.addEventListener('click', async () => {
           confirmBtn.disabled = true;
-          confirmBtn.innerHTML = '<span>Processando ativação...</span>';
-
-          await TicoPlan.setPlan('pro', 'pix_instantaneo');
-
-          // Feedback de sucesso com animação
-          inner.innerHTML = `
-            <div class="tico-plan-success-splash">
-              <div class="tico-success-icon">🎉👑</div>
-              <h2>Parabéns, Concurseiro PRO!</h2>
-              <p>Seu <strong>Passaporte Aprovação PRO (R$ 29,90)</strong> foi ativado com sucesso.</p>
-              <div class="tico-success-unlocked-card">
-                <ul>
-                  <li>✓ Vidas Infinitas (∞) desbloqueadas</li>
-                  <li>✓ Acesso integral aos 37 Capítulos e 111 Fases</li>
-                  <li>✓ Oficina de Redação Ilimitada com IA ativada</li>
-                  <li>✓ Selo Dourado PRO adicionado ao seu perfil</li>
-                </ul>
-              </div>
-              <button type="button" class="tico-plan-confirm-btn" id="tico-close-and-enjoy-btn">
-                Bora Estudar com Vidas Infinitas! 🚀
-              </button>
-            </div>
-          `;
-
-          inner.querySelector('#tico-close-and-enjoy-btn')?.addEventListener('click', () => {
-            TicoPlan.closeModal();
-          });
+          confirmBtn.innerHTML = '<span>Abrindo pagamento seguro...</span>';
+          try {
+            await TicoPlan.setPlan('pro'); // navega para o Mercado Pago (não retorna se der certo)
+          } catch (err) {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<span>⚡ Ativar Modo PRO (R$ 29,90) Agora</span>';
+            alert(err.message || 'Não foi possível abrir o pagamento. Tente novamente.');
+          }
         });
       }
 
@@ -836,6 +782,7 @@
       window.TicoPlan = this;
 
       this.updateUI();
+      this.checkPaymentReturn();
 
       window.addEventListener('auth_state_changed', () => {
         setTimeout(() => this.updateUI(), 200);

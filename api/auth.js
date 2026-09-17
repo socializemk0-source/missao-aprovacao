@@ -126,21 +126,26 @@ export default async function authHandler(req, res) {
     }
 
     // ------------------------------------------------------------------------
-    // ATUALIZAÇÃO / UPGRADE DE PLANO (GRÁTIS vs PRO R$ 29,90)
-    // Sempre aplicado à conta do próprio chamador autenticado — nunca a um
-    // uid arbitrário vindo do corpo da requisição.
+    // DOWNGRADE PARA O PLANO GRÁTIS (autosserviço, sempre a própria conta)
+    //
+    // Virar PRO NUNCA passa mais por aqui: só o webhook do Mercado Pago
+    // (api/payments.js), depois de confirmar um pagamento aprovado de
+    // verdade na API do Mercado Pago, pode setar plan='pro'. Isso fecha o
+    // HIGH-1 da auditoria (qualquer usuário logado conseguia se
+    // autopromover a PRO sem pagar nada).
     // ------------------------------------------------------------------------
-    if (action === 'upgrade-plan') {
+    if (action === 'upgrade-plan' || action === 'downgrade-to-free') {
       if (!(await runRequireAuth(req, res))) return;
-      const targetUid = req.user.uid;
 
       const { plan } = body;
-      const safePlan = plan === 'pro' ? 'pro' : 'free';
+      if (plan === 'pro') {
+        return res.status(403).json({
+          error: 'A ativação do Plano PRO só é confirmada após um pagamento aprovado. Use o checkout do Mercado Pago.',
+        });
+      }
 
-      await updateUser(targetUid, {
-        plan: safePlan,
-        planPrice: 'R$ 29,90',
-      });
+      const targetUid = req.user.uid;
+      await updateUser(targetUid, { plan: 'free' });
 
       const currentUser = await getUserByUid(targetUid);
       if (currentUser) {
@@ -152,18 +157,16 @@ export default async function authHandler(req, res) {
           questionsAnswered: 0,
           streak: currentUser.streak || 1,
           xp: currentUser.xp || 0,
-          plan: safePlan,
+          plan: 'free',
         }).catch(() => {});
       }
 
-      console.log(`[Auth Server] Plano do aluno ${targetUid} atualizado para: ${safePlan.toUpperCase()} (R$ 29,90)`);
+      console.log(`[Auth Server] Plano do aluno ${targetUid} revertido para o modo gratuito.`);
       return res.status(200).json({
         success: true,
-        plan: safePlan,
+        plan: 'free',
         planPrice: 'R$ 29,90',
-        message: safePlan === 'pro'
-          ? 'Parabéns! Seu Plano PRO (R$ 29,90) foi ativado com sucesso. Bons estudos!'
-          : 'Plano atualizado para o modo gratuito.',
+        message: 'Plano atualizado para o modo gratuito.',
       });
     }
 
@@ -214,7 +217,7 @@ export default async function authHandler(req, res) {
       });
     }
 
-    return res.status(404).json({ error: 'Ação não reconhecida. Use sync-profile, get-profile, update-profile ou upgrade-plan.' });
+    return res.status(404).json({ error: 'Ação não reconhecida. Use sync-profile, get-profile, update-profile ou downgrade-to-free.' });
   } catch (err) {
     console.error('[Auth Server] Erro no processamento:', err.message);
     return res.status(500).json({ error: 'Erro no servidor ao processar autenticação. Tente novamente mais tarde.' });
