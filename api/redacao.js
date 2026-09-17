@@ -1,5 +1,5 @@
 import { requireAuth } from "../middleware/requireAuth.js";
-import { getUserByUid, countRecentEssaysByUser, saveEssay } from "../src/db/queries.ts";
+import { getUserByUid, countRecentEssaysByUser, saveEssay } from "../src/db/queries.js";
 
 // Limite semanal de correções por IA do Plano Grátis (o PRO não tem limite
 // — ver PLAN_CONFIG.freeFeatures/proFeatures.redacao em public/tico-plans.js).

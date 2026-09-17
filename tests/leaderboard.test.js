@@ -7,7 +7,7 @@ import { mock } from 'node:test';
 import { createStore, buildNamedExports } from './fixtures/fake-db.js';
 import { makeReq, makeRes } from './fixtures/http.js';
 
-const queriesUrl = new URL('../src/db/queries.ts', import.meta.url).href;
+const queriesUrl = new URL('../src/db/queries.js', import.meta.url).href;
 const store = createStore();
 mock.module(queriesUrl, { namedExports: buildNamedExports(store) });
 

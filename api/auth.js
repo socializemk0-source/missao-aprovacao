@@ -9,7 +9,7 @@ import {
   upsertProfile,
   getSubscriptionByUserId,
   upsertSubscription
-} from '../src/db/queries.ts';
+} from '../src/db/queries.js';
 
 // Credenciais e sessão são 100% responsabilidade do Supabase Auth
 // (supabase.auth.signUp / signInWithPassword no frontend). Este backend

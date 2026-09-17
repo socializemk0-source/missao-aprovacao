@@ -1,6 +1,6 @@
 import { requireAuth } from '../middleware/requireAuth.js';
 import { createMercadoPagoClient } from '../src/payments/mercadopago.js';
-import { upsertSubscription } from '../src/db/queries.ts';
+import { upsertSubscription } from '../src/db/queries.js';
 
 const PRO_PLAN_PRICE = 29.90;
 

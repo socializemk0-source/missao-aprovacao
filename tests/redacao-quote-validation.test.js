@@ -15,7 +15,7 @@ import { createStore, resetStore, buildNamedExports } from './fixtures/fake-db.j
 
 process.env.OPENAI_API_KEY = 'test-key-para-habilitar-a-rota';
 
-const queriesUrl = new URL('../src/db/queries.ts', import.meta.url).href;
+const queriesUrl = new URL('../src/db/queries.js', import.meta.url).href;
 const requireAuthUrl = new URL('../middleware/requireAuth.js', import.meta.url).href;
 
 const store = createStore();

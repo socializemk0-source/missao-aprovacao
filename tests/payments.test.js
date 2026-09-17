@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { createStore, resetStore, buildNamedExports } from './fixtures/fake-db.js';
 import { makeReq, makeRes } from './fixtures/http.js';
 
-const queriesUrl = new URL('../src/db/queries.ts', import.meta.url).href;
+const queriesUrl = new URL('../src/db/queries.js', import.meta.url).href;
 const requireAuthUrl = new URL('../middleware/requireAuth.js', import.meta.url).href;
 
 const store = createStore();

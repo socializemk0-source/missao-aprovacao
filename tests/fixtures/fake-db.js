@@ -1,4 +1,4 @@
-// Dublê determinístico de src/db/queries.ts para os testes de autorização.
+// Dublê determinístico de src/db/queries.js para os testes de autorização.
 // Reproduz o comportamento real de escopo por userId (as queries reais já
 // filtram corretamente por eq(table.userId, userId) — o bug auditado está
 // em QUEM decide qual userId é passado para essas funções, não nelas).
