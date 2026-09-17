@@ -5631,6 +5631,32 @@ aside.sidebar::-webkit-scrollbar-thumb:hover {
   }
 }
 
+.tico-nav-planos-item {
+  position: relative;
+}
+
+.tico-nav-planos-item.is-pro svg {
+  color: #ca8a04;
+}
+
+.tico-nav-pro-dot {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
+@media (max-width: 768px) {
+  .tico-nav-pro-dot {
+    top: 2px;
+    right: 14px;
+  }
+}
+
 /* ==========================================================================
    OTIMIZAÇÕES DE PERFORMANCE E ACESSIBILIDADE MOBILE
    - Zero atraso de clique (elimina 300ms de touch latency)
@@ -6129,6 +6155,24 @@ button, a, input, select, textarea, .mascot, .vlp-phase-btn, .fcm-bell-btn, .ban
 .tico-compare-col small {
   font-size: 11px;
   color: #64748b;
+}
+
+.tico-plan-checkout-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: -6px 0 0;
+}
+
+/* Rodapé do modal: nota de segurança ou alternância para grátis (testes) */
+.tico-plan-footer-section {
+  text-align: center;
+  padding-top: 4px;
 }
 
 /* Checkout e Abas */

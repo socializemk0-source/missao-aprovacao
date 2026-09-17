@@ -421,13 +421,14 @@
                 <small>Plano PRO Ativo</small>
               </div>
             ` : `
-              <button type="button" class="tico-plan-cta-button pulse" id="tico-open-checkout-btn">
+              <button type="button" class="tico-plan-cta-button pulse" id="tico-confirm-pro-btn">
                 <span>Quero Ser PRO Agora</span>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
               </button>
             `}
           </div>
         </div>
+        <p id="tico-plan-checkout-error" class="tico-plan-checkout-error" hidden></p>
 
         <!-- Comparativo Grátis vs PRO, em cards (mesma linguagem visual do resto do app) -->
         <div class="tico-plan-compare-box">
@@ -459,59 +460,39 @@
           </div>
         </div>
 
-        <!-- Área de Checkout: redireciona para o Checkout Pro do Mercado Pago -->
-        <div class="tico-plan-checkout-section" id="tico-plan-checkout-area">
-          <h4 class="tico-plan-checkout-title">Pagamento via Mercado Pago</h4>
-          <p class="tico-plan-checkout-desc">
-            Ao clicar em ativar, você será redirecionado para o ambiente seguro do Mercado Pago
-            (PIX, cartão de crédito ou boleto). O Plano PRO é liberado automaticamente assim que
-            o pagamento for confirmado — nenhum dado de cartão passa por este site.
-          </p>
-
-          <!-- Botões de Ação do Checkout -->
-          <div class="tico-plan-actions-bar">
-            ${isPro ? `
-              <div class="tico-plan-active-actions">
-                <p class="tico-plan-success-notice">✅ Seu Plano PRO de R$ 29,90 já está 100% ativo nesta conta.</p>
-                <button type="button" class="tico-btn-toggle-test" id="tico-toggle-free-btn">
-                  Alternar para Modo Grátis (Para Testes)
-                </button>
-              </div>
-            ` : `
-              <button type="button" class="tico-plan-confirm-btn pulse" id="tico-confirm-pro-btn">
-                <span>⚡ Ativar Modo PRO (R$ 29,90) Agora</span>
-              </button>
-              <p class="tico-plan-security-note">
-                🔒 Garantia de 7 dias ou seu dinheiro de volta · Pagamento seguro e blindado
-              </p>
-            `}
-          </div>
+        <!-- Rodapé: nota de segurança (não-PRO) ou alternar para grátis (PRO, uso interno) -->
+        <div class="tico-plan-footer-section">
+          ${isPro ? `
+            <p class="tico-plan-success-notice">✅ Seu Plano PRO de R$ 29,90 já está 100% ativo nesta conta.</p>
+            <button type="button" class="tico-btn-toggle-test" id="tico-toggle-free-btn">
+              Alternar para Modo Grátis (Para Testes)
+            </button>
+          ` : `
+            <p class="tico-plan-security-note">
+              🔒 Pagamento seguro via Mercado Pago (PIX, cartão ou boleto) · Garantia de 7 dias ou seu dinheiro de volta
+            </p>
+          `}
         </div>
       `;
 
-      // Botão Scroll para Checkout
-      const openCheckoutBtn = inner.querySelector('#tico-open-checkout-btn');
-      if (openCheckoutBtn) {
-        openCheckoutBtn.addEventListener('click', () => {
-          const checkoutArea = inner.querySelector('#tico-plan-checkout-area');
-          if (checkoutArea) {
-            checkoutArea.scrollIntoView({ behavior: 'smooth' });
-          }
-        });
-      }
-
       // Botão Ativar PRO — redireciona para o checkout real do Mercado Pago.
       const confirmBtn = inner.querySelector('#tico-confirm-pro-btn');
+      const checkoutError = inner.querySelector('#tico-plan-checkout-error');
       if (confirmBtn) {
         confirmBtn.addEventListener('click', async () => {
           confirmBtn.disabled = true;
+          if (checkoutError) checkoutError.hidden = true;
+          const originalContent = confirmBtn.innerHTML;
           confirmBtn.innerHTML = '<span>Abrindo pagamento seguro...</span>';
           try {
             await TicoPlan.setPlan('pro'); // navega para o Mercado Pago (não retorna se der certo)
           } catch (err) {
             confirmBtn.disabled = false;
-            confirmBtn.innerHTML = '<span>⚡ Ativar Modo PRO (R$ 29,90) Agora</span>';
-            alert(err.message || 'Não foi possível abrir o pagamento. Tente novamente.');
+            confirmBtn.innerHTML = originalContent;
+            if (checkoutError) {
+              checkoutError.textContent = err.message || 'Não foi possível abrir o pagamento. Tente novamente.';
+              checkoutError.hidden = false;
+            }
           }
         });
       }
@@ -530,8 +511,11 @@
     updateUI() {
       const isPro = this.isPro();
 
-      // 1. Botão de Plano no Topo / Header
+      // 1. Botão de conta do usuário no header (login/perfil)
       this.injectHeaderTrigger(isPro);
+
+      // 1b. Aba "Planos" na navegação principal
+      this.injectSidebarPlanosTab(isPro);
 
       // 2. Indicador de corações/vidas no jogo
       this.updateHeartsDisplay(isPro);
@@ -602,39 +586,39 @@
         userBtn.onclick = () => { window.location.href = '/cadastro'; };
       }
 
-      // Injetar Botão de Plano PRO
-      let badgeBtn = document.getElementById('tico-pro-plan-header-badge');
-      if (!badgeBtn) {
-        badgeBtn = document.createElement('button');
-        badgeBtn.id = 'tico-pro-plan-header-badge';
-        badgeBtn.type = 'button';
-        badgeBtn.className = 'tico-pro-header-btn';
-        badgeBtn.addEventListener('click', () => this.openModal());
+      // O antigo botão "MODO PRO" flutuante foi removido — a entrada para
+      // conhecer/ativar o PRO agora é a aba "Planos" da barra de navegação
+      // principal (ver injectSidebarPlanosTab), que não fica solta por cima
+      // do conteúdo.
+    },
 
-        if (container) {
-          container.appendChild(badgeBtn);
-        } else {
-          document.body.appendChild(badgeBtn);
-          badgeBtn.classList.add('floating-top-right');
-        }
+    // Aba "Planos" na navegação principal (sidebar no desktop, barra
+    // inferior no mobile — é o mesmo <nav>, o layout responsivo é só CSS).
+    // Reinjetada a cada updateUI() porque o React pode recriar esse <nav>.
+    injectSidebarPlanosTab(isPro) {
+      const nav = document.querySelector('nav[aria-label="Navegação principal"]');
+      if (!nav) return;
+
+      let item = document.getElementById('tico-nav-planos-item');
+      if (!item) {
+        item = document.createElement('button');
+        item.id = 'tico-nav-planos-item';
+        item.type = 'button';
+        item.addEventListener('click', () => this.openModal());
+        nav.appendChild(item);
+      } else if (item.parentElement !== nav) {
+        nav.appendChild(item);
       }
 
-      if (isPro) {
-        badgeBtn.className = 'tico-pro-header-btn is-pro';
-        badgeBtn.innerHTML = `
-          <span class="pro-crown">👑</span>
-          <span class="pro-text">PRO ATIVO</span>
-        `;
-        badgeBtn.title = 'Plano PRO Ativo (Acesso Ilimitado R$ 29,90) - Clique para ver detalhes';
-      } else {
-        badgeBtn.className = 'tico-pro-header-btn is-free pulse';
-        badgeBtn.innerHTML = `
-          <span class="pro-crown">👑</span>
-          <span class="pro-text">MODO PRO · R$ 29,90</span>
-          <span class="pro-highlight">Vidas ∞</span>
-        `;
-        badgeBtn.title = 'Desbloqueie todo o edital, vidas infinitas e redações com IA por R$ 29,90';
-      }
+      item.className = `nav-item tico-nav-planos-item${isPro ? ' is-pro' : ''}`;
+      item.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 4l3 12h14l3-12-6.5 6.5L12 4l-3.5 6.5z"></path>
+          <path d="M4 20h16"></path>
+        </svg>
+        Planos
+        ${isPro ? '<span class="tico-nav-pro-dot" title="Plano PRO ativo"></span>' : ''}
+      `;
     },
 
     updateHeartsDisplay(isPro) {
