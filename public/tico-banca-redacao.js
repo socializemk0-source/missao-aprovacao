@@ -686,8 +686,8 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
       if (!user || !window.FirebaseApplet?.getUserViewedTips) return;
 
       const savedTips = await window.FirebaseApplet.getUserViewedTips(user.uid);
-      if (Array.isArray(firestoreTips) && firestoreTips.length > 0) {
-        firestoreTips.forEach(item => {
+      if (Array.isArray(savedTips) && savedTips.length > 0) {
+        savedTips.forEach(item => {
           if (item && item.tipId) {
             viewedTipsCache[item.tipId] = {
               ...(viewedTipsCache[item.tipId] || {}),
