@@ -25,7 +25,8 @@ export function createStore() {
       user_A: [],
       user_B: [],
     },
-    payments: [], // { mpPaymentId, userId, status, ... }
+    subscriptions: {}, // userId -> { userId, mpPreapprovalId, status, ... }
+    subscriptionPayments: [], // { mpPaymentId, mpPreapprovalId, userId, status, ... }
   };
 }
 
@@ -58,7 +59,10 @@ export function buildNamedExports(store) {
     },
 
     // usados por api/data.js
-    getLeaderboard: async () => Object.values(store.users),
+    getLeaderboard: async () => {
+      if (store.__forceLeaderboardError) throw store.__forceLeaderboardError;
+      return Object.values(store.users);
+    },
     getAllUsers: async () => Object.values(store.users),
     saveUserProgress: async (userId, completedPhases, totalQuestionsAnswered, correctAnswers) => {
       store.progress[userId] = { userId, completedPhases, totalQuestionsAnswered, correctAnswers };
@@ -76,14 +80,23 @@ export function buildNamedExports(store) {
     recordViewedTipInDb: async () => ({}),
     getViewedTipsByUserId: async (userId) => store.tips[userId] || [],
 
-    // usados por api/payments.js
-    getPaymentByMpId: async (mpPaymentId) => store.payments.find((p) => p.mpPaymentId === mpPaymentId) || null,
-    recordPayment: async (data) => {
-      if (store.payments.some((p) => p.mpPaymentId === data.mpPaymentId)) {
+    // usados por api/payments.js, api/payments/webhook.js e api/auth.js (downgrade)
+    getSubscriptionByUserId: async (userId) => store.subscriptions[userId] || null,
+    getSubscriptionByPreapprovalId: async (mpPreapprovalId) =>
+      Object.values(store.subscriptions).find((s) => s.mpPreapprovalId === mpPreapprovalId) || null,
+    upsertSubscription: async (data) => {
+      const existing = store.subscriptions[data.userId] || {};
+      store.subscriptions[data.userId] = { ...existing, ...data };
+      return store.subscriptions[data.userId];
+    },
+    getSubscriptionPaymentByMpId: async (mpPaymentId) =>
+      store.subscriptionPayments.find((p) => p.mpPaymentId === mpPaymentId) || null,
+    recordSubscriptionPayment: async (data) => {
+      if (store.subscriptionPayments.some((p) => p.mpPaymentId === data.mpPaymentId)) {
         return null; // onConflictDoNothing real correspondente
       }
       const record = { ...data };
-      store.payments.push(record);
+      store.subscriptionPayments.push(record);
       return record;
     },
   };

@@ -1,6 +1,6 @@
 // src/db/queries.ts
 import { db } from './index.ts';
-import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, payments } from './schema.ts';
+import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.ts';
 import { eq, desc, and } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário
@@ -366,46 +366,104 @@ export async function getViewedTipsByUserId(userId: string) {
   }
 }
 
-// Buscar pagamento já registrado por ID do Mercado Pago (chave de idempotência)
-export async function getPaymentByMpId(mpPaymentId: string) {
+// Buscar assinatura atual do usuário (estado local do Preapproval do MP)
+export async function getSubscriptionByUserId(userId: string) {
   try {
-    const res = await db.select().from(payments).where(eq(payments.mpPaymentId, mpPaymentId)).limit(1);
+    const res = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
     return res[0] || null;
   } catch (error) {
-    console.error('Database query getPaymentByMpId failed:', error);
+    console.error('Database query getSubscriptionByUserId failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }
 
-// Registrar pagamento processado (idempotente: onConflictDoNothing pelo mpPaymentId)
-export async function recordPayment(data: {
-  mpPaymentId: string;
-  mpPreferenceId?: string;
+// Buscar assinatura pelo ID do Preapproval no Mercado Pago (webhook)
+export async function getSubscriptionByPreapprovalId(mpPreapprovalId: string) {
+  try {
+    const res = await db.select().from(subscriptions).where(eq(subscriptions.mpPreapprovalId, mpPreapprovalId)).limit(1);
+    return res[0] || null;
+  } catch (error) {
+    console.error('Database query getSubscriptionByPreapprovalId failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Criar ou atualizar o estado da assinatura (1 linha por usuário).
+export async function upsertSubscription(data: {
   userId: string;
+  mpPreapprovalId?: string | null;
   status: string;
-  statusDetail?: string;
+  plan?: string;
   amount?: number;
   currency?: string;
-  plan?: string;
+  nextPaymentDate?: Date | null;
 }) {
   try {
-    const result = await db.insert(payments)
+    const result = await db.insert(subscriptions)
       .values({
-        mpPaymentId: data.mpPaymentId,
-        mpPreferenceId: data.mpPreferenceId || null,
         userId: data.userId,
+        mpPreapprovalId: data.mpPreapprovalId || null,
         status: data.status,
-        statusDetail: data.statusDetail || '',
-        amount: data.amount !== undefined ? String(data.amount) : null,
-        currency: data.currency || 'BRL',
         plan: data.plan || 'pro',
+        amount: data.amount !== undefined ? String(data.amount) : '29.90',
+        currency: data.currency || 'BRL',
+        nextPaymentDate: data.nextPaymentDate ?? null,
         updatedAt: new Date(),
       })
-      .onConflictDoNothing({ target: payments.mpPaymentId })
+      .onConflictDoUpdate({
+        target: subscriptions.userId,
+        set: {
+          ...(data.mpPreapprovalId !== undefined ? { mpPreapprovalId: data.mpPreapprovalId } : {}),
+          status: data.status,
+          ...(data.amount !== undefined ? { amount: String(data.amount) } : {}),
+          ...(data.nextPaymentDate !== undefined ? { nextPaymentDate: data.nextPaymentDate } : {}),
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return result[0];
+  } catch (error) {
+    console.error('Database query upsertSubscription failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Buscar cobrança recorrente já registrada por ID do Mercado Pago (chave de idempotência)
+export async function getSubscriptionPaymentByMpId(mpPaymentId: string) {
+  try {
+    const res = await db.select().from(subscriptionPayments).where(eq(subscriptionPayments.mpPaymentId, mpPaymentId)).limit(1);
+    return res[0] || null;
+  } catch (error) {
+    console.error('Database query getSubscriptionPaymentByMpId failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Registrar cobrança recorrente processada (idempotente: onConflictDoNothing pelo mpPaymentId)
+export async function recordSubscriptionPayment(data: {
+  mpPaymentId: string;
+  mpPreapprovalId: string;
+  userId: string;
+  status: string;
+  amount?: number;
+  currency?: string;
+}) {
+  try {
+    const result = await db.insert(subscriptionPayments)
+      .values({
+        mpPaymentId: data.mpPaymentId,
+        mpPreapprovalId: data.mpPreapprovalId,
+        userId: data.userId,
+        status: data.status,
+        amount: data.amount !== undefined ? String(data.amount) : null,
+        currency: data.currency || 'BRL',
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing({ target: subscriptionPayments.mpPaymentId })
       .returning();
     return result[0] || null; // null quando já existia (notificação duplicada do MP)
   } catch (error) {
-    console.error('Database query recordPayment failed:', error);
+    console.error('Database query recordSubscriptionPayment failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }

@@ -1,9 +1,14 @@
-// Cliente do Mercado Pago (Checkout Pro) + validação de assinatura de webhook.
+// Cliente do Mercado Pago (Assinaturas / Preapproval) + validação de
+// assinatura de webhook.
 //
-// Ponto crítico de segurança: um pagamento só é considerado válido depois
-// de consultarmos a API do Mercado Pago diretamente com o Access Token do
-// servidor — nunca confiamos no corpo da notificação do webhook por si só
-// (ele pode ser forjado; a API, com o token secreto, não).
+// O Plano PRO é uma cobrança RECORRENTE de R$ 29,90/mês, não um pagamento
+// único — por isso usamos a API de Assinaturas (Preapproval), não a de
+// Preferências de Checkout Pro.
+//
+// Ponto crítico de segurança: o estado de uma assinatura só é considerado
+// válido depois de consultarmos a API do Mercado Pago diretamente com o
+// Access Token do servidor — nunca confiamos no corpo da notificação do
+// webhook por si só (ele pode ser forjado; a API, com o token secreto, não).
 
 import crypto from 'crypto';
 
@@ -14,49 +19,83 @@ export function createMercadoPagoClient({ accessToken = process.env.MERCADOPAGO_
     throw new Error('MERCADOPAGO_ACCESS_TOKEN não configurado no servidor.');
   }
 
-  async function createPreference({ title, price, externalReference, backUrls, notificationUrl }) {
-    const res = await fetchImpl(`${MP_API_BASE}/checkout/preferences`, {
+  const authHeaders = {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  // Cria a assinatura (Preapproval) e devolve o init_point para onde o
+  // usuário deve ser redirecionado para autorizar a cobrança recorrente.
+  async function createSubscription({ reason, price, externalReference, backUrl, notificationUrl }) {
+    const res = await fetchImpl(`${MP_API_BASE}/preapproval`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders,
       body: JSON.stringify({
-        items: [
-          {
-            title,
-            quantity: 1,
-            unit_price: price,
-            currency_id: 'BRL',
-          },
-        ],
+        reason,
         external_reference: externalReference,
-        back_urls: backUrls,
-        auto_return: 'approved',
+        back_url: backUrl,
         notification_url: notificationUrl,
+        auto_recurring: {
+          frequency: 1,
+          frequency_type: 'months',
+          transaction_amount: price,
+          currency_id: 'BRL',
+        },
+        status: 'pending',
       }),
     });
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`Falha ao criar preferência no Mercado Pago (HTTP ${res.status}): ${text}`);
+      throw new Error(`Falha ao criar assinatura no Mercado Pago (HTTP ${res.status}): ${text}`);
     }
     return res.json();
   }
 
-  async function getPayment(paymentId) {
-    const res = await fetchImpl(`${MP_API_BASE}/v1/payments/${encodeURIComponent(paymentId)}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+  // Re-consulta o estado real de uma assinatura (nunca confiar no corpo do webhook).
+  async function getSubscription(preapprovalId) {
+    const res = await fetchImpl(`${MP_API_BASE}/preapproval/${encodeURIComponent(preapprovalId)}`, {
+      headers: authHeaders,
     });
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`Falha ao consultar pagamento no Mercado Pago (HTTP ${res.status}): ${text}`);
+      throw new Error(`Falha ao consultar assinatura no Mercado Pago (HTTP ${res.status}): ${text}`);
     }
     return res.json();
   }
 
-  return { createPreference, getPayment };
+  // Cancela a assinatura de verdade no Mercado Pago (autosserviço de downgrade
+  // precisa chamar isto — senão o usuário "vira grátis" no app mas continua
+  // sendo cobrado todo mês).
+  async function cancelSubscription(preapprovalId) {
+    const res = await fetchImpl(`${MP_API_BASE}/preapproval/${encodeURIComponent(preapprovalId)}`, {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ status: 'cancelled' }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Falha ao cancelar assinatura no Mercado Pago (HTTP ${res.status}): ${text}`);
+    }
+    return res.json();
+  }
+
+  // Re-consulta uma cobrança recorrente específica (evento subscription_authorized_payment).
+  async function getAuthorizedPayment(authorizedPaymentId) {
+    const res = await fetchImpl(`${MP_API_BASE}/authorized_payments/${encodeURIComponent(authorizedPaymentId)}`, {
+      headers: authHeaders,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Falha ao consultar cobrança recorrente no Mercado Pago (HTTP ${res.status}): ${text}`);
+    }
+    return res.json();
+  }
+
+  return { createSubscription, getSubscription, cancelSubscription, getAuthorizedPayment };
 }
 
 // Valida o header x-signature de um webhook do Mercado Pago.

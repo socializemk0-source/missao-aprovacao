@@ -1,11 +1,14 @@
 import { requireAuth } from '../middleware/requireAuth.js';
+import { createMercadoPagoClient } from '../src/payments/mercadopago.js';
 import {
   getOrCreateUser,
   getUserByUid,
   updateUser,
   syncLeaderboardEntry,
   getProfileByUserId,
-  upsertProfile
+  upsertProfile,
+  getSubscriptionByUserId,
+  upsertSubscription
 } from '../src/db/queries.ts';
 
 // Credenciais e sessão são 100% responsabilidade do Supabase Auth
@@ -20,7 +23,7 @@ async function runRequireAuth(req, res) {
   return authorized; // se false, requireAuth já respondeu 401
 }
 
-export default async function authHandler(req, res) {
+export default async function authHandler(req, res, deps = {}) {
   res.setHeader('Content-Type', 'application/json');
 
   const { method } = req;
@@ -129,10 +132,16 @@ export default async function authHandler(req, res) {
     // DOWNGRADE PARA O PLANO GRÁTIS (autosserviço, sempre a própria conta)
     //
     // Virar PRO NUNCA passa mais por aqui: só o webhook do Mercado Pago
-    // (api/payments.js), depois de confirmar um pagamento aprovado de
-    // verdade na API do Mercado Pago, pode setar plan='pro'. Isso fecha o
-    // HIGH-1 da auditoria (qualquer usuário logado conseguia se
-    // autopromover a PRO sem pagar nada).
+    // (api/payments/webhook.js), depois de confirmar uma assinatura
+    // autorizada de verdade na API do Mercado Pago, pode setar plan='pro'.
+    // Isso fecha o HIGH-1 da auditoria (qualquer usuário logado conseguia
+    // se autopromover a PRO sem pagar nada).
+    //
+    // O Plano PRO é uma assinatura RECORRENTE (R$ 29,90/mês) — por isso,
+    // se o usuário tiver uma assinatura ativa, o downgrade precisa
+    // CANCELAR ela de verdade no Mercado Pago primeiro. Sem isso, o
+    // usuário "vira grátis" só no nosso banco, mas continua sendo
+    // cobrado todo mês.
     // ------------------------------------------------------------------------
     if (action === 'upgrade-plan' || action === 'downgrade-to-free') {
       if (!(await runRequireAuth(req, res))) return;
@@ -140,11 +149,30 @@ export default async function authHandler(req, res) {
       const { plan } = body;
       if (plan === 'pro') {
         return res.status(403).json({
-          error: 'A ativação do Plano PRO só é confirmada após um pagamento aprovado. Use o checkout do Mercado Pago.',
+          error: 'A ativação do Plano PRO só é confirmada após uma assinatura aprovada. Use o checkout do Mercado Pago.',
         });
       }
 
       const targetUid = req.user.uid;
+
+      const subscription = await getSubscriptionByUserId(targetUid);
+      if (subscription?.mpPreapprovalId && subscription.status === 'authorized') {
+        try {
+          const mpClient = deps.mpClient || createMercadoPagoClient();
+          await mpClient.cancelSubscription(subscription.mpPreapprovalId);
+          await upsertSubscription({
+            userId: targetUid,
+            mpPreapprovalId: subscription.mpPreapprovalId,
+            status: 'cancelled',
+          });
+        } catch (err) {
+          console.error('[Auth Server] Falha ao cancelar assinatura no Mercado Pago:', err.message);
+          return res.status(502).json({
+            error: 'Não foi possível cancelar sua assinatura agora. Tente novamente em instantes.',
+          });
+        }
+      }
+
       await updateUser(targetUid, { plan: 'free' });
 
       const currentUser = await getUserByUid(targetUid);

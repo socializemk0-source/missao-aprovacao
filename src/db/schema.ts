@@ -100,20 +100,34 @@ export const viewedTips = pgTable('viewed_tips', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// Tabela de Pagamentos (Mercado Pago) — registro de auditoria e chave de
-// idempotência (mpPaymentId é único: o webhook do Mercado Pago pode
-// reenviar a mesma notificação várias vezes, e nunca deve aplicar o
-// mesmo pagamento duas vezes).
-export const payments = pgTable('payments', {
+// Assinatura recorrente do Plano PRO (Mercado Pago Preapproval). Uma
+// linha por usuário com o estado atual — atualizada a cada webhook
+// "subscription_preapproval" do Mercado Pago (authorized/paused/cancelled).
+export const subscriptions = pgTable('subscriptions', {
   id: serial('id').primaryKey(),
-  mpPaymentId: text('mp_payment_id').notNull().unique(), // ID do pagamento no Mercado Pago
-  mpPreferenceId: text('mp_preference_id'),
-  userId: text('user_id').notNull(), // uid do Supabase Auth (req.user.uid) — nunca vindo do cliente
-  status: text('status').notNull(), // approved | pending | rejected | in_process | ...
-  statusDetail: text('status_detail').default(''),
+  userId: text('user_id').notNull().unique(), // uid do Supabase Auth — nunca vindo do cliente
+  mpPreapprovalId: text('mp_preapproval_id').unique(),
+  status: text('status').notNull().default('none'), // none | pending | authorized | paused | cancelled
+  plan: text('plan').default('pro'),
+  amount: numeric('amount', { precision: 10, scale: 2 }).default('29.90'),
+  currency: text('currency').default('BRL'),
+  nextPaymentDate: timestamp('next_payment_date'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Histórico de cobranças recorrentes já processadas — registro de
+// auditoria e chave de idempotência (mpPaymentId é único: o webhook do
+// Mercado Pago pode reenviar a mesma notificação várias vezes, e nunca
+// deve aplicar a mesma cobrança duas vezes).
+export const subscriptionPayments = pgTable('subscription_payments', {
+  id: serial('id').primaryKey(),
+  mpPaymentId: text('mp_payment_id').notNull().unique(), // ID do authorized_payment no Mercado Pago
+  mpPreapprovalId: text('mp_preapproval_id').notNull(),
+  userId: text('user_id').notNull(),
+  status: text('status').notNull(), // approved | pending | rejected | ...
   amount: numeric('amount', { precision: 10, scale: 2 }),
   currency: text('currency').default('BRL'),
-  plan: text('plan').default('pro'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });

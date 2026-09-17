@@ -22,7 +22,7 @@
   const PLAN_CONFIG = {
     price: 'R$ 29,90',
     priceValue: 29.90,
-    periodLabel: 'Acesso Completo · Pagamento Único de Lançamento',
+    periodLabel: 'Assinatura Mensal · Cancele quando quiser',
     freeChapterLimit: 5, // Capítulos 1 a 5 no modo gratuito (índices 0 a 4)
     freeFeatures: {
       hearts: '5 Vidas com tempo de recarga',
@@ -184,7 +184,7 @@
               <div class="tico-plan-success-splash">
                 <div class="tico-success-icon">🎉👑</div>
                 <h2>Parabéns, Concurseiro PRO!</h2>
-                <p>Seu <strong>Passaporte Aprovação PRO (R$ 29,90)</strong> foi confirmado e ativado.</p>
+                <p>Sua <strong>assinatura Passaporte Aprovação PRO (R$ 29,90/mês)</strong> foi confirmada e ativada.</p>
                 <div class="tico-success-unlocked-card">
                   <ul>
                     <li>✓ Vidas Infinitas (∞) desbloqueadas</li>
@@ -315,7 +315,7 @@
           <div style="display: flex; flex-direction: column; gap: 10px;">
             ${!isPro ? `
               <button type="button" class="tico-plan-confirm-btn" id="tico-profile-upgrade-btn" style="width: 100%;">
-                <span>👑 Ativar Modo PRO (R$ 29,90)</span>
+                <span>👑 Assinar Modo PRO (R$ 29,90/mês)</span>
               </button>
             ` : ''}
             <button type="button" id="tico-profile-logout-btn" style="background: #fff; border: 1px solid #fecaca; color: #dc2626; padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
@@ -394,24 +394,24 @@
           </h2>
           <p class="tico-plan-subtitle">
             ${customMessage ? `<span class="tico-plan-custom-alert">${customMessage}</span><br>` : ''}
-            ${isPro 
-              ? 'Seu acesso ilimitado a todos os 37 capítulos, 111 fases e redações com IA está ativo.' 
-              : 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por apenas <strong>R$ 29,90</strong>.'}
+            ${isPro
+              ? 'Sua assinatura está ativa: acesso ilimitado a todos os 37 capítulos, 111 fases e redações com IA.'
+              : 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por apenas <strong>R$ 29,90/mês</strong>.'}
           </p>
         </div>
 
         <!-- Preço e Chamada de Valor -->
         <div class="tico-plan-pricing-banner ${isPro ? 'is-pro-active' : ''}">
           <div class="tico-plan-price-left">
-            <span class="tico-plan-price-label">${isPro ? 'STATUS ATUAL DA CONTA' : 'INVESTIMENTO ÚNICO DE LANÇAMENTO'}</span>
+            <span class="tico-plan-price-label">${isPro ? 'STATUS ATUAL DA CONTA' : 'ASSINATURA MENSAL'}</span>
             <div class="tico-plan-price-row">
               <span class="tico-plan-price-currency">R$</span>
               <span class="tico-plan-price-val">29</span>
               <span class="tico-plan-price-cents">,90</span>
-              <span class="tico-plan-price-period">/ acesso completo</span>
+              <span class="tico-plan-price-period">/ mês</span>
             </div>
             <span class="tico-plan-price-subtext">
-              ${isPro ? '✨ Acesso Vitalício Ativado com Sucesso' : 'Menos de R$ 1,00 por dia · Sem mensalidades recorrentes ocultas'}
+              ${isPro ? '✨ Assinatura Ativa · Renovação automática mensal' : 'Menos de R$ 1,00 por dia · Cancele quando quiser, sem multa'}
             </span>
           </div>
           <div class="tico-plan-price-right">
@@ -421,13 +421,14 @@
                 <small>Plano PRO Ativo</small>
               </div>
             ` : `
-              <button type="button" class="tico-plan-cta-button pulse" id="tico-open-checkout-btn">
-                <span>Quero Ser PRO Agora</span>
+              <button type="button" class="tico-plan-cta-button pulse" id="tico-confirm-pro-btn">
+                <span>Assinar por R$ 29,90/mês</span>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
               </button>
             `}
           </div>
         </div>
+        <p id="tico-plan-checkout-error" class="tico-plan-checkout-error" hidden></p>
 
         <!-- Comparativo Grátis vs PRO, em cards (mesma linguagem visual do resto do app) -->
         <div class="tico-plan-compare-box">
@@ -459,69 +460,62 @@
           </div>
         </div>
 
-        <!-- Área de Checkout: redireciona para o Checkout Pro do Mercado Pago -->
-        <div class="tico-plan-checkout-section" id="tico-plan-checkout-area">
-          <h4 class="tico-plan-checkout-title">Pagamento via Mercado Pago</h4>
-          <p class="tico-plan-checkout-desc">
-            Ao clicar em ativar, você será redirecionado para o ambiente seguro do Mercado Pago
-            (PIX, cartão de crédito ou boleto). O Plano PRO é liberado automaticamente assim que
-            o pagamento for confirmado — nenhum dado de cartão passa por este site.
-          </p>
-
-          <!-- Botões de Ação do Checkout -->
-          <div class="tico-plan-actions-bar">
-            ${isPro ? `
-              <div class="tico-plan-active-actions">
-                <p class="tico-plan-success-notice">✅ Seu Plano PRO de R$ 29,90 já está 100% ativo nesta conta.</p>
-                <button type="button" class="tico-btn-toggle-test" id="tico-toggle-free-btn">
-                  Alternar para Modo Grátis (Para Testes)
-                </button>
-              </div>
-            ` : `
-              <button type="button" class="tico-plan-confirm-btn pulse" id="tico-confirm-pro-btn">
-                <span>⚡ Ativar Modo PRO (R$ 29,90) Agora</span>
-              </button>
-              <p class="tico-plan-security-note">
-                🔒 Garantia de 7 dias ou seu dinheiro de volta · Pagamento seguro e blindado
-              </p>
-            `}
-          </div>
+        <!-- Rodapé: nota de segurança (não-PRO) ou cancelar assinatura (PRO) -->
+        <div class="tico-plan-footer-section">
+          ${isPro ? `
+            <p class="tico-plan-success-notice">✅ Sua assinatura PRO de R$ 29,90/mês está ativa nesta conta.</p>
+            <button type="button" class="tico-btn-toggle-test" id="tico-toggle-free-btn">
+              Cancelar assinatura e voltar para o Grátis
+            </button>
+          ` : `
+            <p class="tico-plan-security-note">
+              🔒 Pagamento seguro via Mercado Pago (PIX, cartão ou boleto) · Garantia de 7 dias ou seu dinheiro de volta
+            </p>
+          `}
         </div>
       `;
 
-      // Botão Scroll para Checkout
-      const openCheckoutBtn = inner.querySelector('#tico-open-checkout-btn');
-      if (openCheckoutBtn) {
-        openCheckoutBtn.addEventListener('click', () => {
-          const checkoutArea = inner.querySelector('#tico-plan-checkout-area');
-          if (checkoutArea) {
-            checkoutArea.scrollIntoView({ behavior: 'smooth' });
-          }
-        });
-      }
-
       // Botão Ativar PRO — redireciona para o checkout real do Mercado Pago.
       const confirmBtn = inner.querySelector('#tico-confirm-pro-btn');
+      const checkoutError = inner.querySelector('#tico-plan-checkout-error');
       if (confirmBtn) {
         confirmBtn.addEventListener('click', async () => {
           confirmBtn.disabled = true;
+          if (checkoutError) checkoutError.hidden = true;
+          const originalContent = confirmBtn.innerHTML;
           confirmBtn.innerHTML = '<span>Abrindo pagamento seguro...</span>';
           try {
             await TicoPlan.setPlan('pro'); // navega para o Mercado Pago (não retorna se der certo)
           } catch (err) {
             confirmBtn.disabled = false;
-            confirmBtn.innerHTML = '<span>⚡ Ativar Modo PRO (R$ 29,90) Agora</span>';
-            alert(err.message || 'Não foi possível abrir o pagamento. Tente novamente.');
+            confirmBtn.innerHTML = originalContent;
+            if (checkoutError) {
+              checkoutError.textContent = err.message || 'Não foi possível abrir o pagamento. Tente novamente.';
+              checkoutError.hidden = false;
+            }
           }
         });
       }
 
-      // Botão Alternar para Grátis (Para testes do criador do app)
+      // Botão Cancelar Assinatura — cancela de verdade no Mercado Pago
+      // antes de voltar para o modo grátis (ver api/auth.js downgrade-to-free).
       const toggleFreeBtn = inner.querySelector('#tico-toggle-free-btn');
       if (toggleFreeBtn) {
         toggleFreeBtn.addEventListener('click', async () => {
-          await TicoPlan.setPlan('free');
-          TicoPlan.renderModalContent(modal);
+          toggleFreeBtn.disabled = true;
+          const originalLabel = toggleFreeBtn.innerHTML;
+          toggleFreeBtn.innerHTML = 'Cancelando assinatura...';
+          try {
+            await TicoPlan.setPlan('free');
+            TicoPlan.renderModalContent(modal);
+          } catch (err) {
+            toggleFreeBtn.disabled = false;
+            toggleFreeBtn.innerHTML = originalLabel;
+            if (checkoutError) {
+              checkoutError.textContent = err.message || 'Não foi possível cancelar sua assinatura agora. Tente novamente.';
+              checkoutError.hidden = false;
+            }
+          }
         });
       }
     },
@@ -530,8 +524,11 @@
     updateUI() {
       const isPro = this.isPro();
 
-      // 1. Botão de Plano no Topo / Header
+      // 1. Botão de conta do usuário no header (login/perfil)
       this.injectHeaderTrigger(isPro);
+
+      // 1b. Aba "Planos" na navegação principal
+      this.injectSidebarPlanosTab(isPro);
 
       // 2. Indicador de corações/vidas no jogo
       this.updateHeartsDisplay(isPro);
@@ -602,39 +599,39 @@
         userBtn.onclick = () => { window.location.href = '/cadastro'; };
       }
 
-      // Injetar Botão de Plano PRO
-      let badgeBtn = document.getElementById('tico-pro-plan-header-badge');
-      if (!badgeBtn) {
-        badgeBtn = document.createElement('button');
-        badgeBtn.id = 'tico-pro-plan-header-badge';
-        badgeBtn.type = 'button';
-        badgeBtn.className = 'tico-pro-header-btn';
-        badgeBtn.addEventListener('click', () => this.openModal());
+      // O antigo botão "MODO PRO" flutuante foi removido — a entrada para
+      // conhecer/ativar o PRO agora é a aba "Planos" da barra de navegação
+      // principal (ver injectSidebarPlanosTab), que não fica solta por cima
+      // do conteúdo.
+    },
 
-        if (container) {
-          container.appendChild(badgeBtn);
-        } else {
-          document.body.appendChild(badgeBtn);
-          badgeBtn.classList.add('floating-top-right');
-        }
+    // Aba "Planos" na navegação principal (sidebar no desktop, barra
+    // inferior no mobile — é o mesmo <nav>, o layout responsivo é só CSS).
+    // Reinjetada a cada updateUI() porque o React pode recriar esse <nav>.
+    injectSidebarPlanosTab(isPro) {
+      const nav = document.querySelector('nav[aria-label="Navegação principal"]');
+      if (!nav) return;
+
+      let item = document.getElementById('tico-nav-planos-item');
+      if (!item) {
+        item = document.createElement('button');
+        item.id = 'tico-nav-planos-item';
+        item.type = 'button';
+        item.addEventListener('click', () => this.openModal());
+        nav.appendChild(item);
+      } else if (item.parentElement !== nav) {
+        nav.appendChild(item);
       }
 
-      if (isPro) {
-        badgeBtn.className = 'tico-pro-header-btn is-pro';
-        badgeBtn.innerHTML = `
-          <span class="pro-crown">👑</span>
-          <span class="pro-text">PRO ATIVO</span>
-        `;
-        badgeBtn.title = 'Plano PRO Ativo (Acesso Ilimitado R$ 29,90) - Clique para ver detalhes';
-      } else {
-        badgeBtn.className = 'tico-pro-header-btn is-free pulse';
-        badgeBtn.innerHTML = `
-          <span class="pro-crown">👑</span>
-          <span class="pro-text">MODO PRO · R$ 29,90</span>
-          <span class="pro-highlight">Vidas ∞</span>
-        `;
-        badgeBtn.title = 'Desbloqueie todo o edital, vidas infinitas e redações com IA por R$ 29,90';
-      }
+      item.className = `nav-item tico-nav-planos-item${isPro ? ' is-pro' : ''}`;
+      item.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 4l3 12h14l3-12-6.5 6.5L12 4l-3.5 6.5z"></path>
+          <path d="M4 20h16"></path>
+        </svg>
+        Planos
+        ${isPro ? '<span class="tico-nav-pro-dot" title="Plano PRO ativo"></span>' : ''}
+      `;
     },
 
     updateHeartsDisplay(isPro) {
@@ -680,9 +677,9 @@
           <div class="plan-banner-icon">🚀</div>
           <div class="plan-banner-info">
             <strong>Modo Gratuito: Capítulos 1 a 5 Liberados</strong>
-            <span>Gostou do treino? Desbloqueie todo o edital (37 capítulos e 111 fases) + Vidas Infinitas por apenas <strong>R$ 29,90</strong>.</span>
+            <span>Gostou do treino? Desbloqueie todo o edital (37 capítulos e 111 fases) + Vidas Infinitas por apenas <strong>R$ 29,90/mês</strong>.</span>
           </div>
-          <button type="button" class="plan-banner-btn upgrade pulse" onclick="window.TicoPlan.openModal()">Desbloquear Tudo (R$ 29,90)</button>
+          <button type="button" class="plan-banner-btn upgrade pulse" onclick="window.TicoPlan.openModal()">Desbloquear Tudo (R$ 29,90/mês)</button>
         `;
       }
     },
@@ -710,7 +707,7 @@
             card.classList.remove('tico-chapter-locked-by-plan');
           } else {
             badge.className = 'tico-chapter-tier-badge is-pro-exclusive';
-            badge.innerHTML = '<span>👑 Exclusivo Plano PRO (R$ 29,90)</span>';
+            badge.innerHTML = '<span>👑 Exclusivo Plano PRO (R$ 29,90/mês)</span>';
             card.classList.add('tico-chapter-locked-by-plan');
 
             // Interceptar cliques nas fases deste capítulo avançado se for gratuito
@@ -722,7 +719,7 @@
                   if (!TicoPlan.isPro()) {
                     e.stopImmediatePropagation();
                     e.preventDefault();
-                    TicoPlan.openModal('details', `🦉 O Capítulo ${idx + 1} é exclusivo do <strong>Plano PRO</strong>! Desbloqueie todos os 37 capítulos e 111 fases por apenas R$ 29,90.`);
+                    TicoPlan.openModal('details', `🦉 O Capítulo ${idx + 1} é exclusivo do <strong>Plano PRO</strong>! Desbloqueie todos os 37 capítulos e 111 fases por apenas R$ 29,90/mês.`);
                   }
                 }, true);
               }
@@ -759,7 +756,7 @@
         badge.className = 'tico-redacao-plan-tag is-free';
         badge.innerHTML = `
           <span>🆓 MODO DEGUSTAÇÃO: 1 CORREÇÃO SEMANAL</span>
-          <button type="button" onclick="window.TicoPlan.openModal()">Quero Ilimitadas por R$ 29,90</button>
+          <button type="button" onclick="window.TicoPlan.openModal()">Quero Ilimitadas por R$ 29,90/mês</button>
         `;
       }
     },
