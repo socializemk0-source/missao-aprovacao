@@ -5657,6 +5657,27 @@ aside.sidebar::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Micro-interação: Tico reage a um toque com um pulinho animado e uma
+   pose alegre do próprio sprite (o sprite de mascot.png já tem 6 poses
+   numa grade 3x2, mas só a pose padrão — 0% 0% — era usada em qualquer
+   lugar; as outras 5 nunca apareciam). Ver tico-mascot-animations.js. */
+@keyframes tico-cheer-pop {
+  0% { transform: scale(1) rotate(0deg); }
+  30% { transform: scale(1.18, 0.85) rotate(-6deg); }
+  55% { transform: scale(0.92, 1.12) rotate(4deg) translateY(-10px); }
+  75% { transform: scale(1.06, 0.96) rotate(-2deg) translateY(2px); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+.mascot.tico-reacting {
+  animation: tico-cheer-pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.mascot.tico-frame-cheer1 { background-position: 50% 0% !important; }
+.mascot.tico-frame-cheer2 { background-position: 100% 0% !important; }
+.mascot.tico-frame-cheer3 { background-position: 50% 100% !important; }
+.mascot.tico-frame-cheer4 { background-position: 100% 100% !important; }
+
 /* ==========================================================================
    OTIMIZAÇÕES DE PERFORMANCE E ACESSIBILIDADE MOBILE
    - Zero atraso de clique (elimina 300ms de touch latency)
