@@ -6,13 +6,15 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const SUPABASE_CONFIG = {
-  url: window.__SUPABASE_URL__ || 'https://missao-aprovacao.supabase.co',
+  url: window.__SUPABASE_URL__ || '',
   anonKey: window.__SUPABASE_ANON_KEY__ || '',
 };
 
-// Busca a configuração real do servidor antes de inicializar o client,
-// para nunca depender só do fallback hardcoded acima.
-async function resolveSupabaseConfig() {
+// Busca a configuração real do servidor ANTES de inicializar o client —
+// top-level await (este script é type="module"), para nunca criar o
+// client do Supabase com uma URL/chave placeholder que seria descartada
+// depois sem efeito nenhum.
+if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
   try {
     const res = await fetch('/api/config/supabase');
     if (res.ok) {
@@ -20,12 +22,14 @@ async function resolveSupabaseConfig() {
       if (data.supabaseUrl) SUPABASE_CONFIG.url = data.supabaseUrl;
       if (data.supabaseAnonKey) SUPABASE_CONFIG.anonKey = data.supabaseAnonKey;
     }
-  } catch (_) {
-    // mantém o fallback acima
+  } catch (err) {
+    console.error('[Supabase Client] Não foi possível carregar a configuração do servidor:', err);
   }
 }
 
-const configReady = resolveSupabaseConfig();
+if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
+  console.error('[Supabase Client] SUPABASE_URL/SUPABASE_ANON_KEY ausentes — login e sincronização com a nuvem ficarão indisponíveis.');
+}
 
 export const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
   auth: {
@@ -96,7 +100,6 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
     throw new Error('Todos os campos (nome, e-mail, senha, WhatsApp e cidade) são obrigatórios.');
   }
 
-  await configReady;
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -129,7 +132,6 @@ export async function loginWithEmail(email, password) {
     throw new Error('E-mail e senha são obrigatórios.');
   }
 
-  await configReady;
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data.session) {
     throw new Error(error?.message || 'E-mail ou senha incorretos.');
@@ -169,7 +171,6 @@ export async function loginGuest() {
 }
 
 export async function loginWithGoogle() {
-  await configReady;
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: window.location.origin },

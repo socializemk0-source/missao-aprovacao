@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -103,9 +104,13 @@ app.use('/api/data', apiGeneralLimiter, (req, res) => {
 
 // Configuração pública do Supabase Client para inicialização no navegador
 app.get('/api/config/supabase', apiGeneralLimiter, (req, res) => {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    console.error('[Config] SUPABASE_URL/SUPABASE_ANON_KEY não configuradas no ambiente.');
+    return res.status(503).json({ error: 'Configuração do Supabase ausente no servidor.' });
+  }
   res.status(200).json({
-    supabaseUrl: process.env.SUPABASE_URL || 'https://missao-aprovacao.supabase.co',
-    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1pc3Nhby1hcHJvdmFjYW8iLCJyb2xlIjoiYW5vbiIsImlhdCI6MTczNzAzMDQwMCwiZXhwIjoyMDUyNjA2NDAwfQ.anon_key'
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
   });
 });
 
