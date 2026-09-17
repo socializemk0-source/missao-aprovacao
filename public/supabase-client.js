@@ -160,6 +160,7 @@ export async function loginGuest() {
     name: 'Concurseiro Convidado',
     email: '',
     isGuest: true,
+    isAnonymous: true, // usado pelo bundle React pra decidir o texto de "sessão temporária" no perfil
     targetExam: 'Polícia Federal',
     plan: 'free',
     xp: 0,

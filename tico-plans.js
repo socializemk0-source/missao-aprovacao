@@ -42,6 +42,61 @@
     }
   };
 
+  // Dados do comparativo Grátis vs PRO (renderizados como cards no modal)
+  const PLAN_COMPARISON = [
+    {
+      icon: '💖',
+      title: 'Vidas / Corações',
+      subtitle: 'Margem para errar e aprender',
+      free: '5 Vidas',
+      freeNote: 'Espera recarregar ao zerar',
+      pro: 'Vidas Infinitas (∞)',
+      proNote: 'Estude sem parar nem travar',
+    },
+    {
+      icon: '🗺️',
+      title: 'Trilha do Edital',
+      subtitle: 'Capítulos e fases mapeadas',
+      free: 'Capítulos 1 a 5',
+      freeNote: 'Foco nas matérias base',
+      pro: '37 Capítulos & 111 Fases',
+      proNote: '100% do edital completo',
+    },
+    {
+      icon: '✍️',
+      title: 'Oficina de Redação com IA',
+      subtitle: 'Correções do Professor Tico',
+      free: '1 por semana',
+      freeNote: 'Avaliação preliminar',
+      pro: 'Submissões Ilimitadas',
+      proNote: 'Com espelho oficial e reescrita',
+    },
+    {
+      icon: '🏛️',
+      title: 'Bancas Examinadoras',
+      subtitle: 'Critérios de correção',
+      free: 'Básico',
+      freeNote: 'Cebraspe simplificado',
+      pro: 'Cebraspe, FGV, FCC, Vunesp',
+      proNote: 'Modelos e esqueletos oficiais',
+    },
+    {
+      icon: '📊',
+      title: 'Raio-X de Fraquezas',
+      subtitle: 'Diagnóstico pedagógico',
+      free: '✕ Não incluso',
+      pro: '✓ Raio-X Detalhado',
+      proNote: 'Mapeia onde você mais erra',
+    },
+    {
+      icon: '🏆',
+      title: 'Selo VIP no Ranking',
+      subtitle: 'Destaque entre concorrentes',
+      free: 'Padrão',
+      pro: '⭐ Selo Dourado PRO',
+    },
+  ];
+
   // Gerenciador central do estado do Plano
   const TicoPlan = {
     config: PLAN_CONFIG,
@@ -374,102 +429,33 @@
           </div>
         </div>
 
-        <!-- Tabela Comparativa de Planos: Grátis vs PRO -->
+        <!-- Comparativo Grátis vs PRO, em cards (mesma linguagem visual do resto do app) -->
         <div class="tico-plan-compare-box">
           <h3 class="tico-plan-compare-title">Compare o Modo Grátis com o Modo PRO</h3>
-          <div class="tico-plan-table-wrap">
-            <table class="tico-plan-table">
-              <thead>
-                <tr>
-                  <th class="col-feature">Recurso do Jogo</th>
-                  <th class="col-free">Modo Grátis</th>
-                  <th class="col-pro">Modo PRO (R$ 29,90) 👑</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td class="col-feature">
-                    <strong>💖 Vidas / Corações</strong>
-                    <small>Margem para errar e aprender</small>
-                  </td>
-                  <td class="col-free">
-                    <span class="badge-free">5 Vidas</span>
-                    <small>Espera recarregar ao zerar</small>
-                  </td>
-                  <td class="col-pro">
-                    <span class="badge-pro">Vidas Infinitas (∞)</span>
-                    <small>Estude sem parar nem travar</small>
-                  </td>
-                </tr>
-                <tr>
-                  <td class="col-feature">
-                    <strong>🗺️ Trilha do Edital</strong>
-                    <small>Capítulos e fases mapeadas</small>
-                  </td>
-                  <td class="col-free">
-                    <span class="badge-free">Capítulos 1 a 5</span>
-                    <small>Foco nas matérias base</small>
-                  </td>
-                  <td class="col-pro">
-                    <span class="badge-pro">37 Capítulos & 111 Fases</span>
-                    <small>100% do edital completo</small>
-                  </td>
-                </tr>
-                <tr>
-                  <td class="col-feature">
-                    <strong>✍️ Oficina de Redação com IA</strong>
-                    <small>Correções do Professor Tico</small>
-                  </td>
-                  <td class="col-free">
-                    <span class="badge-free">1 por semana</span>
-                    <small>Avaliação preliminar</small>
-                  </td>
-                  <td class="col-pro">
-                    <span class="badge-pro">Submissões Ilimitadas</span>
-                    <small>Com espelho oficial e reescrita</small>
-                  </td>
-                </tr>
-                <tr>
-                  <td class="col-feature">
-                    <strong>🏛️ Bancas Examinadoras</strong>
-                    <small>Critérios de correção</small>
-                  </td>
-                  <td class="col-free">
-                    <span class="badge-free">Básico</span>
-                    <small>Cebraspe simplificado</small>
-                  </td>
-                  <td class="col-pro">
-                    <span class="badge-pro">Cebraspe, FGV, FCC, Vunesp</span>
-                    <small>Modelos e esqueletos oficiais</small>
-                  </td>
-                </tr>
-                <tr>
-                  <td class="col-feature">
-                    <strong>📊 Raio-X de Fraquezas</strong>
-                    <small>Diagnóstico pedagógico</small>
-                  </td>
-                  <td class="col-free">
-                    <span class="badge-free-cross">✕ Não incluso</span>
-                  </td>
-                  <td class="col-pro">
-                    <span class="badge-pro">✓ Raio-X Detalhado</span>
-                    <small>Mapeia onde você mais erra</small>
-                  </td>
-                </tr>
-                <tr>
-                  <td class="col-feature">
-                    <strong>🏆 Selo VIP no Ranking</strong>
-                    <small>Destaque entre concorrentes</small>
-                  </td>
-                  <td class="col-free">
-                    <span class="badge-free">Padrão</span>
-                  </td>
-                  <td class="col-pro">
-                    <span class="badge-pro">⭐ Selo Dourado PRO</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="tico-compare-grid">
+            ${PLAN_COMPARISON.map(item => `
+              <div class="tico-compare-card">
+                <div class="tico-compare-card-head">
+                  <span class="tico-compare-icon">${item.icon}</span>
+                  <div>
+                    <strong>${item.title}</strong>
+                    ${item.subtitle ? `<small>${item.subtitle}</small>` : ''}
+                  </div>
+                </div>
+                <div class="tico-compare-row">
+                  <div class="tico-compare-col free">
+                    <span class="tico-compare-tag">Grátis</span>
+                    <strong>${item.free}</strong>
+                    ${item.freeNote ? `<small>${item.freeNote}</small>` : ''}
+                  </div>
+                  <div class="tico-compare-col pro">
+                    <span class="tico-compare-tag">PRO</span>
+                    <strong>${item.pro}</strong>
+                    ${item.proNote ? `<small>${item.proNote}</small>` : ''}
+                  </div>
+                </div>
+              </div>
+            `).join('')}
           </div>
         </div>
 

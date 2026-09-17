@@ -680,12 +680,12 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
 
   loadViewedTipsFromStorage();
 
-  async function loadViewedTipsFromFirestore() {
+  async function loadViewedTipsFromServer() {
     try {
       const user = window.FirebaseApplet?.auth?.currentUser;
       if (!user || !window.FirebaseApplet?.getUserViewedTips) return;
 
-      const firestoreTips = await window.FirebaseApplet.getUserViewedTips(user.uid);
+      const savedTips = await window.FirebaseApplet.getUserViewedTips(user.uid);
       if (Array.isArray(firestoreTips) && firestoreTips.length > 0) {
         firestoreTips.forEach(item => {
           if (item && item.tipId) {
@@ -699,7 +699,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
         renderDailyTipUI();
       }
     } catch (err) {
-      console.warn('[Firebase] Não foi possível carregar histórico de dicas:', err);
+      console.warn('[Perfil] Não foi possível carregar histórico de dicas:', err);
     }
   }
 
@@ -728,7 +728,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
         await window.FirebaseApplet.recordViewedTip(user.uid, tip);
       }
     } catch (err) {
-      console.warn('[Firebase] Não foi possível registrar visualização no Firestore:', err);
+      console.warn('[Perfil] Não foi possível registrar visualização:', err);
     }
   }
 
@@ -755,7 +755,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
         await window.FirebaseApplet.toggleMasteredTip(user.uid, tipId, newState);
       }
     } catch (err) {
-      console.warn('[Firebase] Erro ao sincronizar status de domínio no Firestore:', err);
+      console.warn('[Perfil] Erro ao sincronizar status de domínio:', err);
     }
   }
 
@@ -777,7 +777,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
         await window.FirebaseApplet.toggleFavoriteTip(user.uid, tipId, newState);
       }
     } catch (err) {
-      console.warn('[Firebase] Erro ao sincronizar favorito no Firestore:', err);
+      console.warn('[Perfil] Erro ao sincronizar favorito:', err);
     }
   }
 
@@ -848,7 +848,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
             </span>
           </div>
           <button type="button" class="tico-tip-history-btn" id="btn-open-tips-history">
-            <span>📜 Histórico no Firestore</span>
+            <span>📜 Histórico de Dicas</span>
             <strong style="background: #74c939; color: #fff; padding: 2px 8px; border-radius: 20px; font-size: 11px; box-shadow: 0 1px #58a722;">
               ${bancaViewedTips.length}
             </strong>
@@ -890,7 +890,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
 
         <div class="tico-tip-footer">
           <div class="tico-tip-stats-cloud">
-            <span>${isUserAuth ? '☁️ Sincronizado no Firestore' : '💾 Salvo localmente'}</span>
+            <span>${isUserAuth ? '☁️ Sincronizado na nuvem' : '💾 Salvo localmente'}</span>
             <span>·</span>
             <span>👁️ Visualizada ${viewCount}x</span>
             ${masteredCount > 0 ? `<span>·</span> <span style="color: #ca8a04; font-weight: 700;">⭐ ${masteredCount} de ${tips.length} dominadas nesta banca</span>` : ''}
@@ -988,7 +988,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
           <div class="tico-history-modal-header">
             <h3 class="tico-history-modal-title">
               <span>📜</span>
-              <span>Histórico de Dicas no Firestore · ${bancaInfo.name}</span>
+              <span>Histórico de Dicas · ${bancaInfo.name}</span>
             </h3>
             <button type="button" class="tico-history-modal-close" id="btn-close-tips-history" title="Fechar">&times;</button>
           </div>
@@ -997,7 +997,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
             <div class="tico-history-stats-banner">
               <div class="tico-history-stat-box">
                 <span class="tico-history-stat-num">${totalCount}</span>
-                <span class="tico-history-stat-lbl">Visualizadas no Firestore</span>
+                <span class="tico-history-stat-lbl">Visualizadas</span>
               </div>
               <div class="tico-history-stat-box" style="border-color: #fde047; background: #fefce8;">
                 <span class="tico-history-stat-num" style="color: #a16207;">${masteredCount}</span>
@@ -1152,17 +1152,17 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
       syncBancaTopics();
       updateLineCountersOnly();
 
-      // 6. Connect with Firestore to load/sync user preference and tips
-      loadBancaPreferenceFromFirestore();
-      loadViewedTipsFromFirestore();
+      // 6. Sincronizar preferência de banca e dicas visualizadas com o servidor
+      loadBancaPreferenceFromServer();
+      loadViewedTipsFromServer();
 
-      // Listen to Firebase Auth state if available
+      // Escuta mudanças de sessão, se disponível
       if (!essayPage.dataset.authSubscribed && window.FirebaseApplet && window.FirebaseApplet.subscribeAuth) {
         essayPage.dataset.authSubscribed = 'true';
         window.FirebaseApplet.subscribeAuth((user) => {
           if (user) {
-            loadBancaPreferenceFromFirestore();
-            loadViewedTipsFromFirestore();
+            loadBancaPreferenceFromServer();
+            loadViewedTipsFromServer();
           }
         });
       }
@@ -1301,9 +1301,9 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
     renderDailyTipUI();
     syncBancaTopics();
 
-    // Persist to Firestore user document
+    // Persistir no perfil do usuário
     if (shouldPersist) {
-      await persistBancaPreferenceToFirestore(bId);
+      await persistBancaPreferenceToServer(bId);
     }
 
     // Notify user via friendly banner or Tico animation
@@ -1312,11 +1312,11 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
     }
   }
 
-  async function persistBancaPreferenceToFirestore(bId) {
+  async function persistBancaPreferenceToServer(bId) {
     const statusBadge = document.getElementById('tico-banca-sync-badge');
     if (statusBadge) {
       statusBadge.className = 'tico-banca-sync-badge saving';
-      statusBadge.innerHTML = `<span class="sync-icon">🔄</span> <span class="sync-text">Salvando no Firestore...</span>`;
+      statusBadge.innerHTML = `<span class="sync-icon">🔄</span> <span class="sync-text">Salvando...</span>`;
     }
 
     try {
@@ -1336,7 +1336,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
         statusBadge.innerHTML = `<span class="sync-icon">💾</span> <span class="sync-text">Salvo localmente (${bId})</span>`;
       }
     } catch (err) {
-      console.warn('[Firebase] Erro ao persistir banca no Firestore:', err);
+      console.warn('[Perfil] Erro ao persistir banca:', err);
       if (statusBadge) {
         statusBadge.className = 'tico-banca-sync-badge local';
         statusBadge.innerHTML = `<span class="sync-icon">💾</span> <span class="sync-text">Salvo localmente</span>`;
@@ -1344,7 +1344,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
     }
   }
 
-  async function loadBancaPreferenceFromFirestore() {
+  async function loadBancaPreferenceFromServer() {
     const statusBadge = document.getElementById('tico-banca-sync-badge');
     try {
       const user = window.FirebaseApplet?.auth?.currentUser;
@@ -1366,11 +1366,11 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
           statusBadge.innerHTML = `<span class="sync-icon">☁️</span> <span class="sync-text">Banca do perfil: ${savedBanca}</span>`;
         }
       } else if (currentSelectedBanca) {
-        // First time in Firestore -> save user's initial selection
-        persistBancaPreferenceToFirestore(currentSelectedBanca);
+        // Primeira vez no perfil -> salva a seleção inicial do usuário
+        persistBancaPreferenceToServer(currentSelectedBanca);
       }
     } catch (err) {
-      console.warn('[Firebase] Não foi possível carregar banca do Firestore:', err);
+      console.warn('[Perfil] Não foi possível carregar a banca preferida:', err);
     }
   }
 
@@ -1669,7 +1669,7 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
       textarea.dataset.inputBound = 'true';
       textarea.addEventListener('input', () => {
         updateLineCountersOnly();
-        triggerFirestoreAutosave();
+        triggerAutosave();
       });
     }
 
@@ -1682,12 +1682,12 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
       });
     }
 
-    // Monitor essay send button to also save to Firestore
+    // Monitora o botão de envio da redação para também salvar no servidor
     const sendBtn = essayPage.querySelector('button.primary-button') || essayPage.querySelector('button.essay-send');
     if (sendBtn && !sendBtn.dataset.cloudAttached) {
       sendBtn.dataset.cloudAttached = 'true';
       sendBtn.addEventListener('click', () => {
-        triggerFirestoreSaveOnSend();
+        triggerSaveOnSend();
       });
     }
   }
@@ -1775,16 +1775,16 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
     }
   }
 
-  // FIREBASE CLOUD PERSISTENCE
+  // PERSISTÊNCIA NA NUVEM
   let autosaveTimer = null;
-  function triggerFirestoreAutosave() {
+  function triggerAutosave() {
     if (autosaveTimer) clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       saveEssayToCloud(false);
     }, 4000);
   }
 
-  function triggerFirestoreSaveOnSend() {
+  function triggerSaveOnSend() {
     setTimeout(() => {
       saveEssayToCloud(true);
     }, 1000);
@@ -1816,9 +1816,9 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
 
     try {
       await window.FirebaseApplet.saveUserEssay(user.uid, essayData);
-      console.log('[Firebase] Redação salva com sucesso na nuvem Firestore.');
+      console.log('[Redação] Salva com sucesso na nuvem.');
     } catch (e) {
-      console.warn('[Firebase] Não foi possível salvar rascunho de redação:', e);
+      console.warn('[Redação] Não foi possível salvar rascunho:', e);
     }
   }
 

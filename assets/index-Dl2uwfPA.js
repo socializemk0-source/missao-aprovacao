@@ -124,7 +124,7 @@ function DailyMissionsView({state:e,navigate:t}){
     if(!user)return;
     setLoading(!0);
     await loadMissionsAndProgress(user.uid);
-    setToast("Missões e progresso diário atualizados com o Firestore!");
+    setToast("Missões e progresso diário atualizados!");
     setTimeout(()=>setToast(""),3000);
   }
 
@@ -139,9 +139,9 @@ function DailyMissionsView({state:e,navigate:t}){
 
   return(0,G.jsxs)(`main`,{className:`content-page daily-missions-page`,children:[
     (0,G.jsxs)(`div`,{className:`page-intro`,children:[
-      (0,G.jsx)(`span`,{className:`eyebrow`,children:`METAS DIÁRIAS · FIRESTORE AO VIVO`}),
+      (0,G.jsx)(`span`,{className:`eyebrow`,children:`METAS DIÁRIAS · AO VIVO`}),
       (0,G.jsx)(`h1`,{children:`Missões Diárias de Estudo`}),
-      (0,G.jsx)(`p`,{children:`Tarefas frescas puxadas do Firestore todos os dias para manter o foco, disciplina e constância na sua aprovação.`})
+      (0,G.jsx)(`p`,{children:`Tarefas frescas todos os dias para manter o foco, disciplina e constância na sua aprovação.`})
     ]}),
     toast&&(0,G.jsx)(`div`,{className:`profile-toast-success`,role:`status`,children:toast}),
     (0,G.jsxs)(`div`,{className:`daily-header-card`,children:[
@@ -155,7 +155,7 @@ function DailyMissionsView({state:e,navigate:t}){
           (0,G.jsx)(`small`,{children:`Renovação em`}),
           (0,G.jsx)(`strong`,{children:timeLeft||`Meia-noite`})
         ]}),
-        (0,G.jsx)(`button`,{className:`leaderboard-refresh-btn`,onClick:handleRefresh,disabled:loading,title:`Atualizar tarefas do Firestore`,children:loading?`...`:`↻ Atualizar`})
+        (0,G.jsx)(`button`,{className:`leaderboard-refresh-btn`,onClick:handleRefresh,disabled:loading,title:`Atualizar tarefas`,children:loading?`...`:`↻ Atualizar`})
       ]})
     ]}),
     (0,G.jsxs)(`section`,{className:`daily-grand-chest-card`,children:[
@@ -196,7 +196,7 @@ function DailyMissionsView({state:e,navigate:t}){
           (0,G.jsxs)(`div`,{className:`mission-action-buttons`,children:[
             isClaimed?(0,G.jsx)(`span`,{className:`mission-claimed-badge`,children:`✓ Resgatada`}):isCompleted?(0,G.jsxs)(`button`,{className:`mission-claim-btn`,onClick:()=>handleClaim(m),children:[`🎁 Resgatar +`,m.xpReward,` XP`]}):(0,G.jsxs)(`div`,{style:{display:`flex`,gap:`6px`,alignItems:`center`},children:[
               (0,G.jsx)(`button`,{className:`mission-start-btn`,onClick:()=>t(m.actionTab||"map"),children:`Treinar ➔`}),
-              (0,G.jsx)(`button`,{className:`mission-test-progress-btn`,onClick:()=>handleAdvance(m),title:`Registrar avanço no Firestore`,children:`+1 Concluir`})
+              (0,G.jsx)(`button`,{className:`mission-test-progress-btn`,onClick:()=>handleAdvance(m),title:`Registrar avanço`,children:`+1 Concluir`})
             ]})
           ]})
         ]})
@@ -258,7 +258,7 @@ function LeaderboardView({state:e,explore:t,openProfile:n}){
             setCloudEntries(docs);
           }
         }catch(err){
-          console.warn("[Firestore Leaderboard] Erro ao carregar:",err);
+          console.warn("[Ranking] Erro ao carregar:",err);
         }finally{
           setLoading(!1);
         }
@@ -335,7 +335,7 @@ function LeaderboardView({state:e,explore:t,openProfile:n}){
     try{
       let docs=await fb.fetchLeaderboard();
       if(docs)setCloudEntries(docs);
-      setStatusMsg("Classificação do Firestore sincronizada!");
+      setStatusMsg("Classificação sincronizada!");
     }catch(err){
       console.warn("Erro ao atualizar ranking:",err);
     }finally{
@@ -355,7 +355,7 @@ function LeaderboardView({state:e,explore:t,openProfile:n}){
 
   return(0,G.jsxs)(`main`,{className:`content-page leaderboard-page`,children:[
     (0,G.jsxs)(`div`,{className:`page-intro`,children:[
-      (0,G.jsx)(`span`,{className:`eyebrow`,children:`COMPETIÇÃO SAUDÁVEL · BANCO DE QUESTÕES FIRESTORE`}),
+      (0,G.jsx)(`span`,{className:`eyebrow`,children:`COMPETIÇÃO SAUDÁVEL · RANKING EM TEMPO REAL`}),
       (0,G.jsx)(`h1`,{children:`Quadro de Honra dos Concursos`}),
       (0,G.jsx)(`p`,{children:`Acompanhe a liderança dos estudantes por número de questões resolvidas e sequência ininterrupta de estudos.`})
     ]}),
@@ -366,8 +366,8 @@ function LeaderboardView({state:e,explore:t,openProfile:n}){
         (0,G.jsxs)(`button`,{className:`metric-toggle-btn ${metric==="xp"?"active":""}`,onClick:()=>setMetric("xp"),children:[(0,G.jsx)(`span`,{children:`⚡`}),`Mais XP Total`]})
       ]}),
       (0,G.jsxs)(`div`,{className:`leaderboard-actions-right`,children:[
-        (0,G.jsxs)(`div`,{className:`leaderboard-db-badge`,children:[(0,G.jsx)(`span`,{className:`db-indicator-dot`}),`Firestore: `,loading?`Carregando...`:`Ao Vivo`]}),
-        (0,G.jsx)(`button`,{className:`leaderboard-refresh-btn`,onClick:handleRefresh,disabled:syncing,title:`Atualizar ranking do Firestore`,children:syncing?`...`:`↻ Atualizar`})
+        (0,G.jsxs)(`div`,{className:`leaderboard-db-badge`,children:[(0,G.jsx)(`span`,{className:`db-indicator-dot`}),`Ranking: `,loading?`Carregando...`:`Ao Vivo`]}),
+        (0,G.jsx)(`button`,{className:`leaderboard-refresh-btn`,onClick:handleRefresh,disabled:syncing,title:`Atualizar ranking`,children:syncing?`...`:`↻ Atualizar`})
       ]})
     ]}),
     statusMsg&&(0,G.jsx)(`div`,{className:`profile-toast-success`,role:`status`,children:statusMsg}),
@@ -494,7 +494,7 @@ function UserProfileView({state:e,explore:t}){
             if(freshDet)setProgressData(freshDet);
           }
         }catch(err){
-          console.warn("[Firestore Profile] Erro ao carregar dados:",err);
+          console.warn("[Perfil] Erro ao carregar dados:",err);
         }finally{
           setLoading(!1);
         }
@@ -554,7 +554,7 @@ function UserProfileView({state:e,explore:t}){
     try{
       await fb.updateUserProfile(user.uid,{targetExam:exam});
       setProfile(prev=>({...prev,targetExam:exam}));
-      setStatusMsg("Concurso-alvo salvo no Firestore!");
+      setStatusMsg("Concurso-alvo salvo!");
     }catch(err){
       console.warn("Erro ao salvar concurso:",err);
     }finally{
@@ -601,7 +601,7 @@ function UserProfileView({state:e,explore:t}){
 
   return(0,G.jsxs)(`main`,{className:`content-page user-profile-page`,children:[
     (0,G.jsxs)(`div`,{className:`page-intro`,children:[
-      (0,G.jsx)(`span`,{className:`eyebrow`,children:`BASE DE DADOS CLOUD FIRESTORE`}),
+      (0,G.jsx)(`span`,{className:`eyebrow`,children:`SEU PROGRESSO NA NUVEM`}),
       (0,G.jsx)(`h1`,{children:`Meu Perfil de Concurseiro`}),
       (0,G.jsx)(`p`,{children:`Acompanhe seu progresso sincronizado em tempo real na nuvem, suas ofensivas e questões respondidas.`})
     ]}),
@@ -614,14 +614,13 @@ function UserProfileView({state:e,explore:t}){
             (0,G.jsx)(`span`,{className:`profile-rank-badge`,children:rankTitle})
           ]}),
           (0,G.jsxs)(`p`,{className:`profile-email-text`,children:[
-            user?.email||(user?.isAnonymous?`Sessão temporária no Firestore (conecte com Google para fixar)`:`Conectado ao Firebase Auth`),
+            user?.email||(user?.isAnonymous?`Sessão temporária (conecte-se com Google para fixar)`:`Conta sincronizada na nuvem`),
             ` · `,
             (0,G.jsx)(`strong`,{children:`Nível ${level}`})
           ]}),
           (0,G.jsxs)(`div`,{className:`profile-db-pill`,children:[
             (0,G.jsx)(`span`,{className:`db-indicator-dot`}),
-            `Cloud Firestore: ai-studio-missaoaprovacao... `,
-            loading?`(carregando...)`:`(ativo e sincronizado)`
+            loading?`Sincronizando...`:`Sincronizado na nuvem`
           ]})
         ]})
       ]}),
@@ -642,7 +641,7 @@ function UserProfileView({state:e,explore:t}){
           (0,G.jsx)(`strong`,{className:`stat-big-val`,children:streakDays}),
           (0,G.jsx)(`span`,{className:`stat-unit`,children:streakDays===1?`dia consecutivo`:`dias seguidos`})
         ]}),
-        (0,G.jsx)(`p`,{className:`stat-subtext`,children:`Meta diária ativa no Firestore! Pratique 1 fase todo dia para não perder a sequência.`}),
+        (0,G.jsx)(`p`,{className:`stat-subtext`,children:`Meta diária ativa! Pratique 1 fase todo dia para não perder a sequência.`}),
         (0,G.jsxs)(`div`,{className:`week-dots`,children:[`S`,`T`,`Q`,`Q`,`S`,`S`,`D`].map((day,idx)=>(0,G.jsxs)(`div`,{className:`week-dot-item`,children:[
           (0,G.jsx)(`span`,{className:`week-dot-circle active`,children:`✓`}),
           (0,G.jsx)(`small`,{children:day})
@@ -694,7 +693,7 @@ function UserProfileView({state:e,explore:t}){
     (0,G.jsxs)(`section`,{className:`profile-target-exam-card`,children:[
       (0,G.jsxs)(`div`,{className:`target-exam-header`,children:[
         (0,G.jsxs)(`div`,{children:[
-          (0,G.jsx)(`span`,{className:`eyebrow`,children:`PERSONALIZAÇÃO NO FIRESTORE`}),
+          (0,G.jsx)(`span`,{className:`eyebrow`,children:`PERSONALIZAÇÃO DO PERFIL`}),
           (0,G.jsx)(`h2`,{children:`Qual é o seu Concurso-Alvo?`}),
           (0,G.jsx)(`p`,{children:`Seu objetivo fica salvo na sua conta do banco de dados para adaptar suas futuras missões.`})
         ]}),
