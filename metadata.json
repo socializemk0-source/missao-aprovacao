@@ -1,0 +1,6 @@
+{
+  "name": "Missão Aprovação",
+  "description": "Plataforma gamificada para concursos públicos com banco de dados relacional Cloud SQL PostgreSQL (us-west2), trilha de 37 capítulos, missões diárias, ranking e oficina de redação discursiva adaptada por banca examinadora (Cebraspe, FGV, FCC, Vunesp, Cesgranrio).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

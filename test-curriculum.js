@@ -1,0 +1,13 @@
+
+let ot, nt;
+estões por treino.`,hint:`Some os acertos dos três treinos antes de dividir.`}],nt=[{id:`portugues`,title:`Palavras em ação`,subject:`Português`,description:`Concordância, pontuação e interpretação.`,color:`blue`,ids:[`p1`,`p2`,`p3`,`p4`,`p5`,`p6`]},{id:`logica`,title:`Conecte as ideias`,subject:`Raciocínio lógico`,description:`Porcentagem, sequências e raciocínio.`,color:`purple`,ids:[`l1`,`l2`,`l3`,`l4`,`l5`,`l6`]},{id:`chefe`,title:`O grande desafio`,subject:`Desafio do capítulo`,description:`Novas situações. Tudo o que você praticou.`,color:`orange`,ids:[`b1`,`b2`,`b3`,`b4`,`b5`,`b6`]}];tt.push(...We),tt.push(...Ye);for(let e of tt)e.subjectId||=e.id.startsWith(`p`)?`portugues`:e.id.startsWith(`l`)?`logica`:`misto`;var rt=Object.fromEntries([...tt,...Xe].map(e=>[e.id,e])),it=new Proxy(rt,{get(e,t){return typeof t==`string`?Object.hasOwn(e,t)?e[t]:Ge(t):void 0}}),at=[[`numeros`,`Matemática`,`Números no caminho`,`matematica`,[`porcentagem`,`media`,`proporcao`]],[`raciocinio`,`Raciocínio lógico`,`Trilhas do raciocínio`,`logica`,[`sequencias`,`conjuntos`,`proposicoes`]],[`constituicao`,`Direito constitucional`,`Praça da Constituição`,`constitucional`,[]],[`administracao`,`Direito administrativo`,`Cidade do serviço público`,`administrativo`,[]],[`justica`,`Direito penal`,`Caminhos da justiça`,`penal`,[]],[`digital`,`Informática`,`Expedição digital`,`informatica`,[]]],ot=[{title:`O começo de tudo`,subject:`Português + Raciocínio lógico`},...at.map(e=>({title:e[2],subject:e[1]}))];for(let[e,t,,n,r]of at){let i=tt.filter(e=>e.subjectId===n);for(let a=0;a<3;a++){let o=r.length?Array.from({length:6},(e,t)=>`g:${n}:${r[a]}:${5e4+a*6+t}`):i.slice(a*4,a*4+4).map(e=>e.id);nt.push({id:`${e}-${a+1}`,title:r.length?[`Explore os fundamentos`,`Avance no raciocínio`,`Desafio da expedição`][a]:[`Primeiras descobertas`,`Conhecimento em ação`,`Desafio da expedição`][a],subject:t,description:`Etapa ${a+1} de ${t}`,color:[`blue`,`purple`,`orange`][a],ids:o})}}for(let e of Qe)ot.push({title:e.title,subject:e.subject}),nt.push(...e.missions);var st={book:j,calculator:F,brain:M,landmark:re,building:P,scale:be,monitor:fe};function ct(){return(0,G.jsxs)(`a`,{className:`lp-brand`,href:`/`
+console.log("ot length:", ot.length);
+console.log("nt length:", nt.length);
+console.log("Sample chapter 0:", ot[0]);
+console.log("Sample chapter 1:", ot[1]);
+console.log("Sample chapter 6:", ot[6]);
+console.log("Sample chapter 7:", ot[7]);
+console.log("Sample chapter 36:", ot[36]);
+console.log("Sample phase 0:", nt[0]);
+console.log("Sample phase 1:", nt[1]);
+console.log("Sample phase 110:", nt[110]);

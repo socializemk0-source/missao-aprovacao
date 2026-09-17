@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Regra de conexão de teste
+    match /test/connection {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Mapeamento seguro de e-mail por hash SHA-256 (listagem terminantemente proibida para blindar privacidade)
+    match /users_by_email/{emailHash} {
+      allow list: if false;
+      allow get, create, update: if true;
+      allow delete: if request.auth != null;
+    }
+
+    // Regras de usuário (perfil e dados do estudante)
+    match /users/{userId} {
+      // Bloqueia expressamente a listagem/raspagem de todos os estudantes por atacantes
+      allow list: if false;
+
+      // Leitura permitida apenas para o próprio estudante dono do perfil
+      allow get: if (request.auth != null && request.auth.uid == userId) ||
+                   (request.auth == null && resource.data.uid == userId);
+
+      // Criação e atualização permitidas apenas para o próprio estudante e NUNCA contendo credenciais/senhas
+      allow create: if ((request.auth != null && request.auth.uid == userId) ||
+                        (request.auth == null && request.resource.data.uid == userId)) &&
+                       !('passwordHash' in request.resource.data) &&
+                       !('password' in request.resource.data);
+
+      allow update: if ((request.auth != null && request.auth.uid == userId) ||
+                        (request.auth == null && resource.data.uid == userId)) &&
+                       !('passwordHash' in request.resource.data) &&
+                       !('password' in request.resource.data);
+
+      allow delete: if request.auth != null && request.auth.uid == userId;
+
+      // Subcoleção de fases e progresso de questões
+      match /progress/{missionId} {
+        allow list, get: if (request.auth != null && request.auth.uid == userId) ||
+                            (request.auth == null);
+        allow create, update: if (request.auth != null && request.auth.uid == userId) ||
+                                 (request.auth == null && (request.resource.data.userId == userId || !('userId' in request.resource.data)));
+        allow delete: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Subcoleção de redações privadas do estudante (proteção total contra acesso indevido)
+      match /essays/{essayId} {
+        allow list, get: if (request.auth != null && request.auth.uid == userId) ||
+                            (request.auth == null);
+        allow create, update: if (request.auth != null && request.auth.uid == userId) ||
+                                 (request.auth == null && (request.resource.data.userId == userId || !('userId' in request.resource.data)));
+        allow delete: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Subcoleção de progresso diário de estudo
+      match /daily_progress/{date} {
+        allow list, get: if (request.auth != null && request.auth.uid == userId) ||
+                            (request.auth == null);
+        allow create, update: if (request.auth != null && request.auth.uid == userId) ||
+                                 (request.auth == null && (request.resource.data.userId == userId || !('userId' in request.resource.data)));
+        allow delete: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Tokens do Firebase Cloud Messaging para notificações push
+      match /fcm_tokens/{tokenId} {
+        allow read, write: if (request.auth != null && request.auth.uid == userId) ||
+                              (request.auth == null);
+      }
+
+      // Histórico de notificações push enviadas ao estudante
+      match /notification_logs/{logId} {
+        allow read, write: if (request.auth != null && request.auth.uid == userId) ||
+                              (request.auth == null);
+      }
+
+      // Histórico de dicas diárias de redação visualizadas por banca
+      match /viewed_tips/{tipId} {
+        allow read, write: if (request.auth != null && request.auth.uid == userId) ||
+                              (request.auth == null);
+      }
+    }
+
+    // Missões Diárias de Estudo: leitura pública para todos os estudantes, criação restrita e sem permissão de alteração/exclusão por usuários
+    match /daily_missions/{missionId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['id', 'date', 'title', 'target', 'xpReward']);
+      allow update, delete: if false;
+    }
+
+    // Ranking e Leaderboard (leitura pública para gamificação, escrita blindada contra injeção de dados sensíveis)
+    match /leaderboard/{userId} {
+      allow read: if true;
+      allow create, update: if ((request.auth != null && request.auth.uid == userId) ||
+                               (request.auth == null && request.resource.data.userId == userId)) &&
+                              !('passwordHash' in request.resource.data) &&
+                              !('password' in request.resource.data) &&
+                              !('email' in request.resource.data) &&
+                              !('whatsapp' in request.resource.data);
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

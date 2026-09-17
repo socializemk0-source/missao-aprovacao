@@ -1,0 +1,175 @@
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import redacaoHandler from './api/redacao.js';
+import notificationsHandler, { runAutomatedStreakCheck } from './api/notifications.js';
+import authHandler from './api/auth.js';
+import dataHandler from './api/data.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Previne quedas inesperadas do processo Node.js por exceções assíncronas não tratadas
+process.on('uncaughtException', (err) => {
+  console.error('[Process Guard] Exceção capturada sem derrubar o servidor:', err?.message || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process Guard] Rejeição de Promise capturada:', reason);
+});
+
+const app = express();
+const PORT = 3000;
+const publicDir = path.join(__dirname, 'public');
+
+// 1. Cabeçalhos de Segurança HTTP (Blindagem contra MIME sniffing, XSS e vazamento de versão)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.removeHeader('X-Powered-By');
+  next();
+});
+
+// 2. Proteção de Body com limite de tamanho rigoroso (bloqueia DoS por exaustão de memória)
+app.use(express.json({ limit: '256kb' }));
+app.use(express.urlencoded({ extended: true, limit: '256kb' }));
+
+// 3. Middleware de captura de erros de parsing JSON (evita crash do Express em JSONs malformados)
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({ error: 'Formato JSON da requisição é inválido.' });
+  }
+  if (err.status === 413 || err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Tamanho da requisição excede o limite de segurança (256KB).' });
+  }
+  next(err);
+});
+
+// 4. Rate Limiter deslizante em memória com limpeza automática de TTL (proteção contra força bruta e DDoS)
+const ipRequestWindows = new Map();
+const RATE_LIMIT_CLEANUP_INTERVAL = 60 * 1000; // 1 minuto
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of ipRequestWindows.entries()) {
+    if (now - record.startTime > 60000) {
+      ipRequestWindows.delete(key);
+    }
+  }
+}, RATE_LIMIT_CLEANUP_INTERVAL);
+
+function createRateLimiter(windowMs, maxRequests, routeTag) {
+  return (req, res, next) => {
+    // Obter IP do cliente respeitando cabeçalhos de proxy reverso
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+    const key = `${routeTag}:${ip}`;
+    const now = Date.now();
+
+    let record = ipRequestWindows.get(key);
+    if (!record || now - record.startTime > windowMs) {
+      record = { startTime: now, count: 1 };
+      ipRequestWindows.set(key, record);
+    } else {
+      record.count++;
+    }
+
+    if (record.count > maxRequests) {
+      res.setHeader('Retry-After', Math.ceil((windowMs - (now - record.startTime)) / 1000));
+      return res.status(429).json({
+        error: 'Muitas tentativas detectadas. Por favor, aguarde alguns segundos antes de tentar novamente.'
+      });
+    }
+
+    next();
+  };
+}
+
+const authLimiter = createRateLimiter(60 * 1000, 20, 'auth'); // máx 20 req/min para autenticação
+const redacaoLimiter = createRateLimiter(60 * 1000, 8, 'redacao'); // máx 8 correções/min
+const apiGeneralLimiter = createRateLimiter(60 * 1000, 120, 'api_general'); // máx 120 req/min
+
+// 5. Rotas de API protegidas
+app.use('/api/auth', authLimiter, (req, res) => {
+  authHandler(req, res);
+});
+
+app.all('/api/redacao', redacaoLimiter, (req, res) => {
+  redacaoHandler(req, res);
+});
+
+// Firebase Cloud Messaging (FCM) streak notifications API
+app.use('/api/notifications', apiGeneralLimiter, (req, res) => {
+  notificationsHandler(req, res);
+});
+
+// API de inspeção e auditoria de dados 100% reais do Firestore e PostgreSQL
+app.use('/api/data', apiGeneralLimiter, (req, res) => {
+  dataHandler(req, res);
+});
+
+// Configuração pública do Supabase Client para inicialização no navegador
+app.get('/api/config/supabase', apiGeneralLimiter, (req, res) => {
+  res.status(200).json({
+    supabaseUrl: process.env.SUPABASE_URL || 'https://missao-aprovacao.supabase.co',
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1pc3Nhby1hcHJvdmFjYW8iLCJyb2xlIjoiYW5vbiIsImlhdCI6MTczNzAzMDQwMCwiZXhwIjoyMDUyNjA2NDAwfQ.anon_key'
+  });
+});
+
+// 6. SPA main HTML routes (ensure the latest index.html is always served)
+const spaRoutes = ['/', '/jogar', '/redacao', '/cadastro', '/entrar', '/privacidade', '/missoes', '/ranking', '/dados'];
+app.get(spaRoutes, (req, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
+
+// 7. Otimização de entrega estática com Cache-Control amigável ao mobile (assets em cache, html sempre fresco)
+const staticOptions = {
+  index: false,
+  maxAge: '1d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    } else if (filePath.endsWith('.js') || filePath.endsWith('.css') || filePath.endsWith('.png') || filePath.endsWith('.svg')) {
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    }
+  }
+};
+
+app.use(express.static(publicDir, staticOptions));
+app.use(express.static(__dirname, staticOptions));
+
+// Fallback for assets in case referenced directly
+app.use('/assets', express.static(path.join(publicDir, 'assets'), staticOptions));
+app.use('/assets', express.static(path.join(__dirname, 'assets'), staticOptions));
+
+// SPA fallback for all other HTML GET routes (excluding /api)
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    return res.sendFile(path.join(publicDir, 'index.html'));
+  }
+  next();
+});
+
+// Middleware final para captura de qualquer erro 500 não tratado em rotas
+app.use((err, req, res, next) => {
+  console.error('[Server Internal Error]:', err?.message || err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Ocorreu um erro interno no servidor.' });
+});
+
+// Automação periódica de lembretes de streak (executa verificação inteligente a cada 30 minutos)
+setInterval(() => {
+  try {
+    runAutomatedStreakCheck().then(summary => {
+      if (summary && summary.remindersSent > 0) {
+        console.log(`[FCM Scheduler] ${summary.remindersSent} lembretes automáticos de streak enviados.`);
+      }
+    }).catch(err => {
+      console.warn('[FCM Scheduler] Erro na checagem de streak:', err.message);
+    });
+  } catch (_) {}
+}, 30 * 60 * 1000);
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on http://0.0.0.0:${PORT}`);
+});

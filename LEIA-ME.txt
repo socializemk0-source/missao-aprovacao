@@ -1,0 +1,26 @@
+MISSAO APROVACAO — OFICINA DE REDACAO — VERCEL
+
+Substitua o pacote anterior pelo conteudo deste ZIP, preservando public e api.
+IMPORTANTE: remova o antigo api/redacao.ts do repositorio. A unica funcao de redacao deve ser api/redacao.js.
+Vercel: Framework Other; Root Directory na raiz que contem vercel.json;
+Build Command vazio; Install Command vazio; Output Directory public.
+Este pacote tem frontend e servidor ja compilados. api/redacao.js inclui suas dependencias locais.
+Correcao para ERR_MODULE_NOT_FOUND: o servidor nao tenta mais importar server/essay.ts em producao.
+Nao use o ZIP estatico anterior para ativar a IA.
+
+SEM CHAVE: a escrita, os temas, os rascunhos e o download funcionam. A IA aparece desativada.
+PARA ATIVAR: no painel Vercel, Settings > Environment Variables, configure:
+OPENAI_API_KEY: chave secreta da API OpenAI com faturamento habilitado.
+ESSAY_ACCESS_CODE: nao e mais utilizado; alunos nao precisam de codigo.
+OPENAI_MODEL: opcional; padrao gpt-4.1-mini.
+Depois faca Redeploy. Nunca coloque a chave no repositorio, no navegador.
+Nao ha campo de codigo no jogo. Basta a chave OpenAI configurada no servidor.
+As chamadas de IA tem custo separado da assinatura ChatGPT.
+
+CONTROLE DE FREQUENCIA: limite por endereco e instancia de 5 pedidos/minuto.
+Esse limite nao e uma cota global de gastos. Configure limites de uso no provedor e protecao de acesso na hospedagem para o teste. Antes de abrir comercialmente, implementar contas e cotas persistentes por usuario.
+
+RUBRICA: geral e autoral, 0-100. Banca organiza o objetivo, nao aplica edital oficial.
+Nao houve calibracao com professores nem chamada real de IA (chave ainda indisponivel).
+Notas estimadas, trechos comentados, historico de ate 12 avaliacoes e reescrita preparados.
+Rascunhos e historico ficam neste navegador e dominio. Evite dados pessoais no texto enviado.

@@ -1,0 +1,25 @@
+{
+  "name": "missao-redacao",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node server.js",
+    "build": "node -e \"console.log('Build complete')\"",
+    "lint": "node --check server.js api/redacao.js api/notifications.js api/auth.js api/data.js supabase-client.js src/db/schema.ts src/db/index.ts src/db/queries.ts",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "@types/pg": "^8.23.1",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "express": "^5.2.1",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^14.4.0",
+    "pg": "^8.23.0"
+  }
+}

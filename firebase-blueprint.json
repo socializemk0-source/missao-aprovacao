@@ -1,0 +1,192 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Perfil do estudante e concurseiro",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "cidade": { "type": "string" },
+        "targetExam": { "type": "string" },
+        "preferredBanca": { "type": "string" },
+        "xp": { "type": "number" },
+        "hearts": { "type": "number" },
+        "streak": { "type": "number" },
+        "lastStudyDate": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Progress": {
+      "title": "Progress",
+      "description": "Progresso de fases e missões concluídas",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "missionId": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "missionId", "completed"]
+    },
+    "Essay": {
+      "title": "Essay",
+      "description": "Redações enviadas e corrigidas por IA",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "topic": { "type": "string" },
+        "text": { "type": "string" },
+        "score": { "type": "number" },
+        "feedback": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "topic", "text"]
+    },
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Pontuações de ranking de estudantes para competição saudável",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "targetExam": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "questionsAnswered": { "type": "number" },
+        "streak": { "type": "number" },
+        "xp": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "name", "questionsAnswered", "streak"]
+    },
+    "DailyMission": {
+      "title": "DailyMission",
+      "description": "Tarefas diárias de estudo geradas e recuperadas do Firestore",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "discipline": { "type": "string" },
+        "category": { "type": "string" },
+        "target": { "type": "number" },
+        "xpReward": { "type": "number" },
+        "gemsReward": { "type": "number" },
+        "icon": { "type": "string" },
+        "actionTab": { "type": "string" },
+        "badge": { "type": "string" }
+      },
+      "required": ["id", "date", "title", "target", "xpReward"]
+    },
+    "DailyProgress": {
+      "title": "DailyProgress",
+      "description": "Progresso diário do estudante nas missões do dia",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string" },
+        "progressMap": { "type": "object" },
+        "completed": { "type": "array" },
+        "claimed": { "type": "array" },
+        "bonusClaimed": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "date"]
+    },
+    "FCMToken": {
+      "title": "FCMToken",
+      "description": "Tokens de registro do Firebase Cloud Messaging para notificações push web",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "token": { "type": "string" },
+        "platform": { "type": "string" },
+        "userAgent": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "targetExam": { "type": "string" },
+        "preferredHour": { "type": "number" },
+        "lastUsedAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "token"]
+    },
+    "StreakNotificationLog": {
+      "title": "StreakNotificationLog",
+      "description": "Histórico de notificações automáticas de sequência enviadas ao estudante",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "streak": { "type": "number" },
+        "targetExam": { "type": "string" },
+        "urgencyLevel": { "type": "string" },
+        "status": { "type": "string" },
+        "sentAt": { "type": "string" },
+        "clicked": { "type": "boolean" }
+      },
+      "required": ["userId", "title", "body", "sentAt"]
+    },
+    "ViewedTip": {
+      "title": "ViewedTip",
+      "description": "Histórico de dicas e estratégias da banca visualizadas pelo concurseiro",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "tipId": { "type": "string" },
+        "banca": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "viewedAt": { "type": "string" },
+        "viewCount": { "type": "number" },
+        "mastered": { "type": "boolean" },
+        "favorited": { "type": "boolean" }
+      },
+      "required": ["userId", "tipId", "banca", "viewedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Dados do perfil do usuário autenticado"
+    },
+    "/users/{userId}/viewed_tips/{tipId}": {
+      "schema": "ViewedTip",
+      "description": "Histórico e domínio de dicas diárias de redação por banca examinadora"
+    },
+    "/users/{userId}/progress/{missionId}": {
+      "schema": "Progress",
+      "description": "Histórico e fases concluídas pelo usuário"
+    },
+    "/users/{userId}/essays/{essayId}": {
+      "schema": "Essay",
+      "description": "Redações do estudante com nota e parecer pedagógico"
+    },
+    "/users/{userId}/daily_progress/{date}": {
+      "schema": "DailyProgress",
+      "description": "Progresso e recompensas diárias do estudante no Firestore"
+    },
+    "/users/{userId}/fcm_tokens/{tokenId}": {
+      "schema": "FCMToken",
+      "description": "Tokens de dispositivos registrados no FCM para o estudante"
+    },
+    "/users/{userId}/notification_logs/{logId}": {
+      "schema": "StreakNotificationLog",
+      "description": "Logs de notificações push enviadas para auditoria e controle de frequência"
+    },
+    "/daily_missions/{missionId}": {
+      "schema": "DailyMission",
+      "description": "Missões diárias globais de estudo armazenadas no Firestore"
+    },
+    "/leaderboard/{userId}": {
+      "schema": "LeaderboardEntry",
+      "description": "Entrada pública de ranking com total de questões respondidas e sequência de estudos"
+    }
+  }
+}
