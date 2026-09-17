@@ -17,6 +17,11 @@ export const createPool = () => {
       user: process.env.SQL_USER,
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
+      // O Postgres do Supabase (conexão direta OU pooler) exige SSL — sem
+      // isto a conexão é recusada de cara. rejectUnauthorized:false porque
+      // o certificado da Supabase não é validado pela CA padrão do Node
+      // (mesma configuração usada para RDS/Heroku Postgres/etc.).
+      ssl: { rejectUnauthorized: false },
       // Baixo de propósito: cada invocação serverless da Vercel roda seu
       // próprio processo com seu próprio pool. Com várias invocações
       // simultâneas, pools "grandes" (ex.: 10) por instância multiplicam e
