@@ -70,11 +70,16 @@ export function buildNamedExports(store) {
     },
     getUserProgress: async (userId) => store.progress[userId] || null,
     saveEssay: async (data) => {
+      const record = { ...data, createdAt: data.createdAt || new Date() };
       store.essays[data.userId] = store.essays[data.userId] || [];
-      store.essays[data.userId].push(data);
-      return data;
+      store.essays[data.userId].push(record);
+      return record;
     },
     getEssaysByUser: async (userId) => store.essays[userId] || [],
+    countRecentEssaysByUser: async (userId, since) => {
+      const list = store.essays[userId] || [];
+      return list.filter((e) => e.createdAt && new Date(e.createdAt).getTime() >= since.getTime()).length;
+    },
     updateDailyMission: async () => ({}),
     getDailyMissions: async () => [],
     recordViewedTipInDb: async () => ({}),

@@ -1,7 +1,7 @@
 // src/db/queries.ts
 import { db } from './index.ts';
 import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.ts';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, gte } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário
 export async function getOrCreateUser(data: {
@@ -236,6 +236,19 @@ export async function getEssaysByUser(userId: string) {
     return await db.select().from(essays).where(eq(essays.userId, userId)).orderBy(desc(essays.createdAt));
   } catch (error) {
     console.error('Database query getEssaysByUser failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Contar correções de redação de um usuário desde uma data (limite
+// semanal do Plano Grátis em api/redacao.js — o PRO não tem limite).
+export async function countRecentEssaysByUser(userId: string, since: Date) {
+  try {
+    const rows = await db.select({ id: essays.id }).from(essays)
+      .where(and(eq(essays.userId, userId), gte(essays.createdAt, since)));
+    return rows.length;
+  } catch (error) {
+    console.error('Database query countRecentEssaysByUser failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }

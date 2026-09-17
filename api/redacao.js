@@ -1,3 +1,11 @@
+import { requireAuth } from "../middleware/requireAuth.js";
+import { getUserByUid, countRecentEssaysByUser, saveEssay } from "../src/db/queries.ts";
+
+// Limite semanal de correções por IA do Plano Grátis (o PRO não tem limite
+// — ver PLAN_CONFIG.freeFeatures/proFeatures.redacao em public/tico-plans.js).
+var FREE_WEEKLY_ESSAY_LIMIT = 1;
+var ESSAY_LIMIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1e3;
+
 //#region lib/essay.ts
 var essayBanks = [
 	"Treino geral",
@@ -445,7 +453,7 @@ Dê até 4 pontos fortes e de 1 a 4 próximos passos com dicas estratégicas par
 Todos os textos de retorno em português, objetivos e profissionais.`;
 }
 
-async function handleEssay(request, env, send = fetch) {
+async function handleEssay(request, env, uid, send = fetch) {
 	const enabled = !!env.OPENAI_API_KEY?.trim();
 	if (request.method === "GET") return json({
 		enabled,
@@ -467,6 +475,30 @@ async function handleEssay(request, env, send = fetch) {
 	}
 	const topic = essayTopics.find((t) => t.id === body?.topicId);
 	if (!topic || !essayBanks.includes(body?.bank) || typeof body?.text !== "string" || body.text.length > 1e4 || wordCount(body.text) < 80) return json({ error: "Escolha um tema e escreva pelo menos 80 palavras, até 10.000 caracteres." }, 400);
+
+	// Limite semanal de correções por IA no Plano Grátis — o PRO (R$ 29,90/
+	// mês) não tem limite. Verificado ANTES de chamar a OpenAI para nunca
+	// gastar a API com uma solicitação que já sabemos que será recusada.
+	let userPlan = "free";
+	try {
+		const userRecord = await getUserByUid(uid);
+		userPlan = userRecord?.plan === "pro" ? "pro" : "free";
+	} catch {
+		return json({ code: "LIMITE_INDISPONIVEL", error: "Não foi possível confirmar seu plano agora. Seu texto continua salvo. Tente novamente em instantes." }, 503);
+	}
+	if (userPlan !== "pro") {
+		let recentCount;
+		try {
+			recentCount = await countRecentEssaysByUser(uid, new Date(Date.now() - ESSAY_LIMIT_WINDOW_MS));
+		} catch {
+			return json({ code: "LIMITE_INDISPONIVEL", error: "Não foi possível confirmar seu limite de correções agora. Seu texto continua salvo. Tente novamente em instantes." }, 503);
+		}
+		if (recentCount >= FREE_WEEKLY_ESSAY_LIMIT) return json({
+			code: "LIMITE_PLANO_GRATIS",
+			error: `O Plano Grátis permite ${FREE_WEEKLY_ESSAY_LIMIT} correção por IA a cada 7 dias. Assine o Plano PRO (R$ 29,90/mês) para correções ilimitadas. Seu texto continua salvo.`
+		}, 403);
+	}
+
 	const now = Date.now(), key = (request.headers.get("x-real-ip") || "shared").slice(0, 120);
 	for (const [k, v] of counts) if (now - v.time >= 6e4) counts.delete(k);
 	if (!counts.has(key) && counts.size >= 2e3) return json({ error: "Muitas solicitações. Aguarde um minuto." }, 429);
@@ -563,6 +595,18 @@ async function handleEssay(request, env, send = fetch) {
 			const normalizedText = normalizeWhitespaceForQuoteMatch(body.text);
 			return failure(Array.isArray(report?.annotations) && report.annotations.some((a) => typeof a?.quote === "string" && !normalizedText.includes(normalizeWhitespaceForQuoteMatch(a.quote))) ? "IA_TRECHO_DIVERGENTE" : "IA_AVALIACAO_INVALIDA", "A avaliação não passou pela conferência de notas, critérios ou trechos citados. Nenhuma nota foi registrada.");
 		}
+		// Registra a correção concluída para valer no limite semanal do Plano
+		// Grátis — nunca bloqueia a resposta ao aluno se esse registro falhar.
+		saveEssay({
+			essayId: crypto.randomUUID(),
+			userId: uid,
+			topic: topic.title,
+			banca: body.bank,
+			content: body.text,
+			score: report.criteria.reduce((sum, c) => sum + c.score, 0),
+			feedback: report.summary,
+			criterios: JSON.stringify(report.criteria)
+		}).catch((err) => console.error("essay_correction_persist_failed", err.message));
 		return json({ report });
 	} catch (error) {
 		if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return failure("IA_TEMPO_ESGOTADO", "O serviço de IA não concluiu a solicitação no prazo.");
@@ -572,6 +616,14 @@ async function handleEssay(request, env, send = fetch) {
 //#endregion
 //#region api/redacao.ts
 async function handler(req, res, deps = {}) {
+	// A consulta de bancas/temas (GET) continua pública; só pedir a
+	// correção (POST) exige login — é o que permite aplicar o limite
+	// semanal do Plano Grátis por usuário, não por navegador.
+	if (req.method === "POST") {
+		let authorized = false;
+		await (deps.requireAuth || requireAuth)(req, res, () => { authorized = true; });
+		if (!authorized) return;
+	}
 	let raw = "";
 	if (req.method === "POST") if (req.body !== void 0) raw = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
 	else for await (const chunk of req) {
@@ -589,7 +641,7 @@ async function handler(req, res, deps = {}) {
 		method: req.method,
 		headers,
 		...req.method === "POST" ? { body: raw } : {}
-	}), process.env, deps.send);
+	}), process.env, req.user?.uid, deps.send);
 	res.statusCode = response.status;
 	response.headers.forEach((v, k) => res.setHeader(k, v));
 	res.end(await response.text());
