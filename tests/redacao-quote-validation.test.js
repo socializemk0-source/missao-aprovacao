@@ -8,11 +8,23 @@
 // `deps.send` substitui o fetch real — nenhuma chamada de rede à OpenAI
 // acontece aqui.
 
-import { test } from 'node:test';
+import { test, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeReq, makeRes } from './fixtures/http.js';
+import { createStore, resetStore, buildNamedExports } from './fixtures/fake-db.js';
 
 process.env.OPENAI_API_KEY = 'test-key-para-habilitar-a-rota';
+
+const queriesUrl = new URL('../src/db/queries.ts', import.meta.url).href;
+const requireAuthUrl = new URL('../middleware/requireAuth.js', import.meta.url).href;
+
+const store = createStore();
+mock.module(queriesUrl, { namedExports: buildNamedExports(store) });
+mock.module(requireAuthUrl, {
+  namedExports: { requireAuth: (await import('./fixtures/fake-auth.js')).requireAuth },
+});
+
+beforeEach(() => resetStore(store));
 
 const { default: redacaoHandler } = await import('../api/redacao.js');
 
@@ -57,7 +69,7 @@ function postEssay(send) {
   const req = makeReq({
     method: 'POST',
     body: { topicId: TOPIC_ID, bank: BANK, text: STUDENT_TEXT },
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: 'Bearer TEST:user_A' },
   });
   const res = makeRes();
   return redacaoHandler(req, res, { send }).then(() => ({ res, body: JSON.parse(res.body) }));

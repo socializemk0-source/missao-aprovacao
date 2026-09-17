@@ -52,6 +52,25 @@ export async function getAccessToken() {
   }
 }
 
+// A Oficina de Redação (React, bundle pré-compilado sem pipeline de build
+// neste repositório) chama fetch('/api/redacao', ...) sem nenhum header —
+// ela nunca soube que a correção passou a exigir login (necessário para
+// aplicar o limite semanal do plano Grátis). Como não há como recompilar
+// o bundle, interceptamos só essa chamada específica e anexamos o
+// Authorization: Bearer <token> por fora, de forma transparente.
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async function (input, init = {}) {
+  const url = typeof input === 'string' ? input : input?.url || '';
+  const method = (init?.method || 'GET').toUpperCase();
+  if (url === '/api/redacao' && method === 'POST') {
+    const token = await getAccessToken();
+    if (token) {
+      init = { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } };
+    }
+  }
+  return nativeFetch(input, init);
+};
+
 // fetch com Authorization: Bearer <token> anexado automaticamente. Toda
 // rota privada de /api/auth e /api/data deve ser chamada por aqui — nunca
 // via fetch() cru, para nunca esquecer o token.
