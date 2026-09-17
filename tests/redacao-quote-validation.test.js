@@ -76,6 +76,20 @@ test('trecho citado igual ao texto do aluno, mas com quebra de linha trocada por
   assert.ok(body.report, 'deve retornar a avaliação, não um erro de trecho divergente');
 });
 
+test('trecho citado com acentuação Unicode decomposta (mesmo texto visível, representação diferente) ainda é aceito', async () => {
+  // "é" como é (composto, o que o navegador normalmente envia) vs.
+  // "e" + acento agudo combinante ́ (decomposto) — visualmente
+  // idêntico, mas `String.prototype.includes` bruto os trata como
+  // diferentes. Modelos de IA às vezes devolvem a forma decomposta.
+  const decomposedQuote = 'A inclusão digital no acesso aos serviços públicos exige planejamento.';
+  const send = async () => fakeOpenAiResponse(validReportWithQuote(decomposedQuote));
+
+  const { res, body } = await postEssay(send);
+
+  assert.equal(res.statusCode, 200, `esperava 200, recebeu ${res.statusCode} (${JSON.stringify(body)})`);
+  assert.ok(body.report, 'deve retornar a avaliação, não um erro de trecho divergente');
+});
+
 test('[guarda-corpo intacto] trecho inventado (que não existe de forma alguma no texto) ainda é rejeitado', async () => {
   const send = async () => fakeOpenAiResponse(validReportWithQuote('frase completamente inventada pela IA que o aluno nunca escreveu'));
 
