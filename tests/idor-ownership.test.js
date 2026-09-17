@@ -1,14 +1,10 @@
-// CRITICAL-3 — TDD RED suite
+// CRITICAL-3 — GREEN suite (após o fix)
 //
-// Testa os handlers REAIS de api/auth.js e api/data.js (nenhum código de
-// produção foi alterado). O banco Postgres é substituído por um dublê
-// determinístico (tests/fixtures/fake-db.js) via mock.module nativo do
-// Node, para rodar sem infraestrutura externa.
-//
-// `req.user` simula o resultado que um middleware requireAuth (ainda não
-// implementado) teria produzido a partir de um token válido. Os handlers
-// atuais nunca leem req.user — só body/query — por isso os testes abaixo
-// marcados [RED] falham hoje: comprovam o CRITICAL-3 (IDOR) na prática.
+// Mesma bateria de testes de tests/idor-ownership.test.js (fase RED), agora
+// exercitando os handlers reais JÁ protegidos por requireAuth + req.user.uid.
+// O Postgres é substituído por um dublê (fake-db.js) e o middleware de auth
+// por um dublê determinístico sem rede (fake-auth.js, convenção de token
+// "TEST:<uid>") — nenhum código de produção foi alterado pelos testes.
 //
 // Rodar com:
 //   node --experimental-test-module-mocks --test tests/idor-ownership.test.js
@@ -19,34 +15,43 @@ import { createStore, resetStore, buildNamedExports } from './fixtures/fake-db.j
 import { makeReq, makeRes } from './fixtures/http.js';
 
 const queriesUrl = new URL('../src/db/queries.ts', import.meta.url).href;
+const requireAuthUrl = new URL('../middleware/requireAuth.js', import.meta.url).href;
 
 const store = createStore();
 mock.module(queriesUrl, { namedExports: buildNamedExports(store) });
+mock.module(requireAuthUrl, {
+  namedExports: {
+    requireAuth: (await import('./fixtures/fake-auth.js')).requireAuth,
+  },
+});
 
 const { default: authHandler } = await import('../api/auth.js');
 const { default: dataHandler } = await import('../api/data.js');
+
+function authHeader(uid) {
+  return { authorization: `Bearer TEST:${uid}` };
+}
 
 beforeEach(() => {
   resetStore(store);
 });
 
 // ---------------------------------------------------------------------
-// 1-2. Ausência de autenticação não é bloqueada (deveria ser 401)
+// 1-2. Ausência de autenticação é bloqueada com 401
 // ---------------------------------------------------------------------
 
-test('[RED] 1. request sem token/identidade ainda retorna 200 (get-profile)', async () => {
-  const req = makeReq({ method: 'POST', body: { action: 'get-profile', uid: 'user_A' } }); // sem req.user
+test('1. request sem token → 401 (get-profile)', async () => {
+  const req = makeReq({ method: 'POST', body: { action: 'get-profile' } }); // sem Authorization
   const res = makeRes();
   await authHandler(req, res);
-  assert.equal(res.statusCode, 401, `esperado 401 sem autenticação, recebido ${res.statusCode}`);
+  assert.equal(res.statusCode, 401);
 });
 
-test('[RED] 2. token inválido no header Authorization ainda retorna 200 (get-essays)', async () => {
-  const req = makeReq({ query: { action: 'get-essays', userId: 'user_A' } });
-  req.headers.authorization = 'Bearer isto-nao-e-um-jwt-valido';
+test('2. token inválido no header Authorization → 401 (get-essays)', async () => {
+  const req = makeReq({ query: { action: 'get-essays' }, headers: { authorization: 'Bearer isto-nao-e-um-token-valido' } });
   const res = makeRes();
   await dataHandler(req, res);
-  assert.equal(res.statusCode, 401, `esperado 401 com token inválido, recebido ${res.statusCode}`);
+  assert.equal(res.statusCode, 401);
 });
 
 // ---------------------------------------------------------------------
@@ -54,7 +59,7 @@ test('[RED] 2. token inválido no header Authorization ainda retorna 200 (get-es
 // ---------------------------------------------------------------------
 
 test('3. usuário A acessando os próprios dados (get-essays) → permitido', async () => {
-  const req = makeReq({ query: { action: 'get-essays', userId: 'user_A' }, user: { uid: 'user_A' } });
+  const req = makeReq({ query: { action: 'get-essays' }, headers: authHeader('user_A') });
   const res = makeRes();
   await dataHandler(req, res);
   assert.equal(res.statusCode, 200);
@@ -65,78 +70,91 @@ test('3. usuário A acessando os próprios dados (get-essays) → permitido', as
 });
 
 // ---------------------------------------------------------------------
-// 4-6. IDOR via body/query.userId apesar de req.user já autenticado
+// 4-6. body/query.userId não tem mais nenhum efeito sobre identidade
 // ---------------------------------------------------------------------
 
-test('[RED] 4. usuário A autenticado enviando userId=B não deve receber dados de B (get-essays)', async () => {
-  const req = makeReq({ query: { action: 'get-essays', userId: 'user_B' }, user: { uid: 'user_A' } });
+test('4. usuário A autenticado enviando userId=B não recebe dados de B (get-essays)', async () => {
+  const req = makeReq({ query: { action: 'get-essays', userId: 'user_B' }, headers: authHeader('user_A') });
   const res = makeRes();
   await dataHandler(req, res);
-  const vazou = (res.body?.essays || []).some((e) => e.content.includes('redação de B'));
-  assert.equal(vazou, false, 'CRITICAL-3: usuário A recebeu o conteúdo da redação privada de B');
+  assert.equal(res.statusCode, 200);
+  const vazouDadosDeB = res.body.essays.some((e) => e.content.includes('redação de B'));
+  assert.equal(vazouDadosDeB, false, 'usuário A não deveria ver a redação de B');
+  assert.ok(res.body.essays.some((e) => e.content.includes('redação de A')), 'deveria ver apenas a própria redação (A)');
 });
 
-test('[RED] 5. usuário A não deve conseguir gravar progresso de B via body.userId (save-progress)', async () => {
+test('5. usuário A não consegue gravar progresso de B via body.userId (save-progress)', async () => {
   const req = makeReq({
     body: { action: 'save-progress', userId: 'user_B', totalQuestionsAnswered: 999, correctAnswers: 999 },
-    user: { uid: 'user_A' },
+    headers: authHeader('user_A'),
   });
   const res = makeRes();
   await dataHandler(req, res);
-  assert.notEqual(
-    store.progress.user_B.totalQuestionsAnswered,
-    999,
-    'CRITICAL-3: usuário A conseguiu sobrescrever o progresso de B só enviando body.userId=B'
-  );
+  assert.equal(res.statusCode, 200);
+  assert.notEqual(store.progress.user_B.totalQuestionsAnswered, 999, 'progresso de B não deveria ter sido alterado');
+  assert.equal(store.progress.user_A.totalQuestionsAnswered, 999, 'o progresso deveria ter sido gravado para A (o autenticado), não para B');
 });
 
-test('[RED] 6. usuário A não deve ler progresso de B via query.userId (get-progress)', async () => {
-  const req = makeReq({ query: { action: 'get-progress', userId: 'user_B' }, user: { uid: 'user_A' } });
+test('6. usuário A não lê progresso de B via query.userId (get-progress)', async () => {
+  const req = makeReq({ query: { action: 'get-progress', userId: 'user_B' }, headers: authHeader('user_A') });
   const res = makeRes();
   await dataHandler(req, res);
-  assert.notEqual(
-    res.body?.progress?.userId,
-    'user_B',
-    'CRITICAL-3: usuário A leu o progresso de B só enviando query.userId=B'
-  );
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.progress.userId, 'user_A', 'deveria retornar o progresso do próprio usuário autenticado (A)');
 });
 
 // ---------------------------------------------------------------------
 // 7-9. Usuário B não pode ler/gravar dados de A
 // ---------------------------------------------------------------------
 
-test('[RED] 7. usuário B não deve conseguir atualizar o perfil de A (update-profile)', async () => {
+test('7. usuário B não consegue atualizar o perfil de A (update-profile)', async () => {
   const req = makeReq({
     body: { action: 'update-profile', uid: 'user_A', fullName: 'Hackeado por B' },
-    user: { uid: 'user_B' },
+    headers: authHeader('user_B'),
   });
   const res = makeRes();
   await authHandler(req, res);
-  assert.notEqual(
-    store.profiles.user_A.fullName,
-    'Hackeado por B',
-    'CRITICAL-3: usuário B alterou o perfil de A enviando body.uid=A'
-  );
+  assert.equal(res.statusCode, 200);
+  assert.notEqual(store.profiles.user_A.fullName, 'Hackeado por B', 'perfil de A não deveria ter sido alterado');
+  assert.equal(store.profiles.user_B.fullName, 'Hackeado por B', 'a atualização deveria valer só para B (o autenticado)');
 });
 
-test('[RED] 8. usuário B não deve conseguir gravar progresso de A (save-progress)', async () => {
+test('8. usuário B não consegue gravar progresso de A (save-progress)', async () => {
   const req = makeReq({
     body: { action: 'save-progress', userId: 'user_A', totalQuestionsAnswered: 777, correctAnswers: 777 },
-    user: { uid: 'user_B' },
+    headers: authHeader('user_B'),
   });
   const res = makeRes();
   await dataHandler(req, res);
-  assert.notEqual(
-    store.progress.user_A.totalQuestionsAnswered,
-    777,
-    'CRITICAL-3: usuário B sobrescreveu o progresso de A enviando body.userId=A'
-  );
+  assert.equal(res.statusCode, 200);
+  assert.notEqual(store.progress.user_A.totalQuestionsAnswered, 777, 'progresso de A não deveria ter sido alterado');
 });
 
-test('[RED] 9. usuário B não deve conseguir ler as redações de A (get-essays)', async () => {
-  const req = makeReq({ query: { action: 'get-essays', userId: 'user_A' }, user: { uid: 'user_B' } });
+test('9. usuário B não consegue ler as redações de A (get-essays)', async () => {
+  const req = makeReq({ query: { action: 'get-essays', userId: 'user_A' }, headers: authHeader('user_B') });
   const res = makeRes();
   await dataHandler(req, res);
-  const vazou = (res.body?.essays || []).some((e) => e.content.includes('redação de A'));
-  assert.equal(vazou, false, 'CRITICAL-3: usuário B leu o conteúdo da redação privada de A');
+  assert.equal(res.statusCode, 200);
+  const vazouDadosDeA = res.body.essays.some((e) => e.content.includes('redação de A'));
+  assert.equal(vazouDadosDeA, false, 'usuário B não deveria ler a redação de A');
+});
+
+// ---------------------------------------------------------------------
+// 10. CRITICAL-4 — dump agregado exige autenticação e nunca inclui
+//     conteúdo de redação de terceiros
+// ---------------------------------------------------------------------
+
+test('10. GET /api/data sem action e sem token → 401 (antes vazava tudo)', async () => {
+  const req = makeReq({ method: 'GET', query: {} });
+  const res = makeRes();
+  await dataHandler(req, res);
+  assert.equal(res.statusCode, 401);
+});
+
+test('11. GET /api/data sem action, autenticado → nunca inclui texto de redação de terceiros', async () => {
+  const req = makeReq({ method: 'GET', query: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await dataHandler(req, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.essays, undefined, 'o dump agregado não deve mais expor o array de redações de terceiros');
 });

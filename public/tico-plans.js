@@ -6,6 +6,18 @@
 (function() {
   'use strict';
 
+  // Escapa HTML antes de inserir qualquer texto vindo do usuário (nome,
+  // e-mail) via innerHTML — nunca confiar em campos de perfil como HTML seguro.
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // Configuração padrão dos Planos
   const PLAN_CONFIG = {
     price: 'R$ 29,90',
@@ -169,7 +181,7 @@
               <span class="tico-plan-mascot-emoji">🎓</span>
               <div class="tico-plan-tag-pill">${isPro ? '👑 ASSINANTE PRO' : '🆓 MODO GRATUITO'}</div>
             </div>
-            <h2 id="tico-profile-modal-title" class="tico-plan-title">${user.name || 'Concurseiro'}</h2>
+            <h2 id="tico-profile-modal-title" class="tico-plan-title">${escapeHtml(user.name || 'Concurseiro')}</h2>
             <p class="tico-plan-subtitle">Seu progresso está salvo e sincronizado na nuvem.</p>
           </div>
 
@@ -643,7 +655,7 @@
         userBtn.className = 'tico-user-header-btn is-logged';
         userBtn.innerHTML = `
           <span class="user-avatar-icon">👤</span>
-          <span class="user-name-label">${firstName}</span>
+          <span class="user-name-label">${escapeHtml(firstName)}</span>
           <span class="user-status-dot"></span>
         `;
         userBtn.title = `Conectado como ${user.name || user.email} · Clique para gerenciar seu perfil`;

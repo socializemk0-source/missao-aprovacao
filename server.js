@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import redacaoHandler from './api/redacao.js';
-import notificationsHandler, { runAutomatedStreakCheck } from './api/notifications.js';
 import authHandler from './api/auth.js';
 import dataHandler from './api/data.js';
 
@@ -97,12 +96,7 @@ app.all('/api/redacao', redacaoLimiter, (req, res) => {
   redacaoHandler(req, res);
 });
 
-// Firebase Cloud Messaging (FCM) streak notifications API
-app.use('/api/notifications', apiGeneralLimiter, (req, res) => {
-  notificationsHandler(req, res);
-});
-
-// API de inspeção e auditoria de dados 100% reais do Firestore e PostgreSQL
+// API de dados da plataforma (progresso, redações, ranking) — PostgreSQL
 app.use('/api/data', apiGeneralLimiter, (req, res) => {
   dataHandler(req, res);
 });
@@ -156,19 +150,6 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   res.status(500).json({ error: 'Ocorreu um erro interno no servidor.' });
 });
-
-// Automação periódica de lembretes de streak (executa verificação inteligente a cada 30 minutos)
-setInterval(() => {
-  try {
-    runAutomatedStreakCheck().then(summary => {
-      if (summary && summary.remindersSent > 0) {
-        console.log(`[FCM Scheduler] ${summary.remindersSent} lembretes automáticos de streak enviados.`);
-      }
-    }).catch(err => {
-      console.warn('[FCM Scheduler] Erro na checagem de streak:', err.message);
-    });
-  } catch (_) {}
-}, 30 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on http://0.0.0.0:${PORT}`);
