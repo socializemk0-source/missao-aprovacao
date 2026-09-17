@@ -13,10 +13,15 @@ export const createPool = () => {
   if (!global._postgresPool) {
     global._postgresPool = new Pool({
       host: process.env.SQL_HOST,
+      port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : 5432,
       user: process.env.SQL_USER,
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
-      max: 10,
+      // Baixo de propósito: cada invocação serverless da Vercel roda seu
+      // próprio processo com seu próprio pool. Com várias invocações
+      // simultâneas, pools "grandes" (ex.: 10) por instância multiplicam e
+      // esgotam rápido o limite de conexões do Postgres/pooler do Supabase.
+      max: 3,
       connectionTimeoutMillis: 15000,
     });
 
