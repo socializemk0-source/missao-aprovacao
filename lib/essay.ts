@@ -318,14 +318,16 @@ export const essayScore = (r: EssayReport) =>
 export const wordCount = (text: string) =>
   text.trim() ? text.trim().split(/\s+/u).length : 0;
 // A IA às vezes cita um trecho real do aluno, mas troca uma quebra de
-// linha por um espaço (comportamento comum de LLM ao reproduzir uma
-// frase). Isso não é uma invenção — é a mesma frase, só reespaçada — mas
-// `text.includes(a.quote)` bruto rejeitava como se fosse. Normaliza só
-// espaços em branco (nunca letras/pontuação) antes de comparar, então o
-// requisito "o trecho tem que existir de verdade no texto do aluno"
-// continua de pé.
+// linha por um espaço, ou devolve acentos em forma Unicode decomposta
+// (ex.: "a" + acento combinante em vez do caractere "ã" já composto) —
+// comportamentos comuns de LLM ao reproduzir uma frase. Isso não é uma
+// invenção — é a mesma frase, só reespaçada/re-encodada — mas
+// `text.includes(a.quote)` bruto rejeitava como se fosse. Normaliza
+// forma Unicode (NFC) e espaços em branco (nunca letras/pontuação) antes
+// de comparar, então o requisito "o trecho tem que existir de verdade no
+// texto do aluno" continua de pé.
 export const normalizeWhitespaceForQuoteMatch = (s: string) =>
-  s.replace(/\s+/g, ' ').trim();
+  s.normalize('NFC').replace(/\s+/g, ' ').trim();
 export function validEssayReport(
   value: unknown,
   text: string,

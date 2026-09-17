@@ -8,6 +8,7 @@ import dataHandler from './api/data.js';
 import leaderboardHandler from './api/data/leaderboard.js';
 import paymentsHandler from './api/payments.js';
 import paymentsWebhookHandler from './api/payments/webhook.js';
+import supabaseConfigHandler from './api/config/supabase.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -121,14 +122,7 @@ app.post('/api/payments', apiGeneralLimiter, (req, res) => {
 
 // Configuração pública do Supabase Client para inicialização no navegador
 app.get('/api/config/supabase', apiGeneralLimiter, (req, res) => {
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-    console.error('[Config] SUPABASE_URL/SUPABASE_ANON_KEY não configuradas no ambiente.');
-    return res.status(503).json({ error: 'Configuração do Supabase ausente no servidor.' });
-  }
-  res.status(200).json({
-    supabaseUrl: process.env.SUPABASE_URL,
-    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
-  });
+  supabaseConfigHandler(req, res);
 });
 
 // 6. SPA main HTML routes (ensure the latest index.html is always served)
