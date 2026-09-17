@@ -1,10 +1,13 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import redacaoHandler from './api/redacao.js';
-import notificationsHandler, { runAutomatedStreakCheck } from './api/notifications.js';
 import authHandler from './api/auth.js';
 import dataHandler from './api/data.js';
+import leaderboardHandler from './api/data/leaderboard.js';
+import paymentsHandler from './api/payments.js';
+import paymentsWebhookHandler from './api/payments/webhook.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -97,21 +100,34 @@ app.all('/api/redacao', redacaoLimiter, (req, res) => {
   redacaoHandler(req, res);
 });
 
-// Firebase Cloud Messaging (FCM) streak notifications API
-app.use('/api/notifications', apiGeneralLimiter, (req, res) => {
-  notificationsHandler(req, res);
+// API de dados da plataforma (progresso, redações, ranking) — PostgreSQL
+// Rotas específicas SEMPRE antes da genérica (Express casa por ordem de
+// registro) — mesma topologia de arquivos que a Vercel usa em produção.
+app.get('/api/data/leaderboard', apiGeneralLimiter, (req, res) => {
+  leaderboardHandler(req, res);
 });
-
-// API de inspeção e auditoria de dados 100% reais do Firestore e PostgreSQL
 app.use('/api/data', apiGeneralLimiter, (req, res) => {
   dataHandler(req, res);
 });
 
+// Pagamentos (Mercado Pago / Checkout Pro) — criação de preferência (autenticada)
+// e webhook de confirmação (público, protegido por assinatura HMAC própria)
+app.post('/api/payments/webhook', apiGeneralLimiter, (req, res) => {
+  paymentsWebhookHandler(req, res);
+});
+app.post('/api/payments', apiGeneralLimiter, (req, res) => {
+  paymentsHandler(req, res);
+});
+
 // Configuração pública do Supabase Client para inicialização no navegador
 app.get('/api/config/supabase', apiGeneralLimiter, (req, res) => {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    console.error('[Config] SUPABASE_URL/SUPABASE_ANON_KEY não configuradas no ambiente.');
+    return res.status(503).json({ error: 'Configuração do Supabase ausente no servidor.' });
+  }
   res.status(200).json({
-    supabaseUrl: process.env.SUPABASE_URL || 'https://missao-aprovacao.supabase.co',
-    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1pc3Nhby1hcHJvdmFjYW8iLCJyb2xlIjoiYW5vbiIsImlhdCI6MTczNzAzMDQwMCwiZXhwIjoyMDUyNjA2NDAwfQ.anon_key'
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
   });
 });
 
@@ -156,19 +172,6 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   res.status(500).json({ error: 'Ocorreu um erro interno no servidor.' });
 });
-
-// Automação periódica de lembretes de streak (executa verificação inteligente a cada 30 minutos)
-setInterval(() => {
-  try {
-    runAutomatedStreakCheck().then(summary => {
-      if (summary && summary.remindersSent > 0) {
-        console.log(`[FCM Scheduler] ${summary.remindersSent} lembretes automáticos de streak enviados.`);
-      }
-    }).catch(err => {
-      console.warn('[FCM Scheduler] Erro na checagem de streak:', err.message);
-    });
-  } catch (_) {}
-}, 30 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on http://0.0.0.0:${PORT}`);

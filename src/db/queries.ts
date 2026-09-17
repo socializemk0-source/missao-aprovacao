@@ -1,6 +1,6 @@
 // src/db/queries.ts
 import { db } from './index.ts';
-import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips } from './schema.ts';
+import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, payments } from './schema.ts';
 import { eq, desc, and } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário
@@ -362,6 +362,50 @@ export async function getViewedTipsByUserId(userId: string) {
     return await db.select().from(viewedTips).where(eq(viewedTips.userId, userId));
   } catch (error) {
     console.error('Database query getViewedTipsByUserId failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Buscar pagamento já registrado por ID do Mercado Pago (chave de idempotência)
+export async function getPaymentByMpId(mpPaymentId: string) {
+  try {
+    const res = await db.select().from(payments).where(eq(payments.mpPaymentId, mpPaymentId)).limit(1);
+    return res[0] || null;
+  } catch (error) {
+    console.error('Database query getPaymentByMpId failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Registrar pagamento processado (idempotente: onConflictDoNothing pelo mpPaymentId)
+export async function recordPayment(data: {
+  mpPaymentId: string;
+  mpPreferenceId?: string;
+  userId: string;
+  status: string;
+  statusDetail?: string;
+  amount?: number;
+  currency?: string;
+  plan?: string;
+}) {
+  try {
+    const result = await db.insert(payments)
+      .values({
+        mpPaymentId: data.mpPaymentId,
+        mpPreferenceId: data.mpPreferenceId || null,
+        userId: data.userId,
+        status: data.status,
+        statusDetail: data.statusDetail || '',
+        amount: data.amount !== undefined ? String(data.amount) : null,
+        currency: data.currency || 'BRL',
+        plan: data.plan || 'pro',
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing({ target: payments.mpPaymentId })
+      .returning();
+    return result[0] || null; // null quando já existia (notificação duplicada do MP)
+  } catch (error) {
+    console.error('Database query recordPayment failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }

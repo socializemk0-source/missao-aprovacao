@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { integer, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { integer, numeric, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
 
 // Tabela de Estudantes / Usuários
 export const users = pgTable('users', {
@@ -97,6 +97,24 @@ export const viewedTips = pgTable('viewed_tips', {
   viewCount: integer('view_count').default(1),
   mastered: integer('mastered').default(0), // 0 ou 1
   favorited: integer('favorited').default(0), // 0 ou 1
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Tabela de Pagamentos (Mercado Pago) — registro de auditoria e chave de
+// idempotência (mpPaymentId é único: o webhook do Mercado Pago pode
+// reenviar a mesma notificação várias vezes, e nunca deve aplicar o
+// mesmo pagamento duas vezes).
+export const payments = pgTable('payments', {
+  id: serial('id').primaryKey(),
+  mpPaymentId: text('mp_payment_id').notNull().unique(), // ID do pagamento no Mercado Pago
+  mpPreferenceId: text('mp_preference_id'),
+  userId: text('user_id').notNull(), // uid do Supabase Auth (req.user.uid) — nunca vindo do cliente
+  status: text('status').notNull(), // approved | pending | rejected | in_process | ...
+  statusDetail: text('status_detail').default(''),
+  amount: numeric('amount', { precision: 10, scale: 2 }),
+  currency: text('currency').default('BRL'),
+  plan: text('plan').default('pro'),
+  createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
