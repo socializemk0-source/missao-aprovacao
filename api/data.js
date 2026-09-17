@@ -1,6 +1,6 @@
 import { requireAuth } from '../middleware/requireAuth.js';
+import { queryLeaderboardEntries } from '../src/leaderboard.js';
 import {
-  getLeaderboard,
   getAllUsers,
   getUserByUid,
   updateUser,
@@ -22,48 +22,15 @@ async function runRequireAuth(req, res) {
 }
 
 /**
- * Consulta a coleção leaderboard (PostgreSQL). Campos expostos são
- * deliberadamente mínimos: este endpoint é público (gamificação), então
- * nunca deve incluir e-mail, telefone ou qualquer dado sensível.
- */
-async function queryLeaderboardEntries() {
-  try {
-    const pgRows = await getLeaderboard();
-    return pgRows.map(row => ({
-      userId: row.userId,
-      name: row.name || 'Estudante',
-      targetExam: row.targetExam || 'Polícia Federal',
-      questionsAnswered: Number(row.questionsAnswered || 0),
-      streak: Number(row.streak || 1),
-      xp: Number(row.xp || 0),
-      photoURL: row.photoUrl || '',
-    }));
-  } catch (pgErr) {
-    console.warn('[API Data] Aviso ao consultar leaderboard:', pgErr.message);
-    return [];
-  }
-}
-
-/**
  * Handler principal para dados da plataforma (progresso, redações,
  * missões, dicas, ranking). Toda ação que opera sobre dados de um usuário
  * específico exige sessão válida (requireAuth) e usa exclusivamente
  * req.user.uid — nunca um userId vindo do cliente.
+ *
+ * O ranking público mora em api/data/leaderboard.js (arquivo próprio, não
+ * um sub-caminho despachado por req.path — ver o comentário lá).
  */
 export default async function dataHandler(req, res) {
-  const path = req.path || '';
-
-  // 1. Leaderboard: única leitura pública deste endpoint (gamificação),
-  //    com payload já reduzido ao mínimo necessário (ver queryLeaderboardEntries).
-  if (path === '/leaderboard' || path.endsWith('/leaderboard')) {
-    const entries = await queryLeaderboardEntries();
-    return res.status(200).json({
-      success: true,
-      count: entries.length,
-      entries,
-    });
-  }
-
   const action = req.query?.action || req.body?.action;
 
   // 1.1 Progresso na Trilha (user_progress)

@@ -1,7 +1,8 @@
-// api/payments.js — checkout (autenticado) + webhook (assinatura própria).
-// Banco mockado (fake-db.js) e requireAuth mockado (fake-auth.js, convenção
-// "TEST:<uid>") como no resto da suíte. O cliente do Mercado Pago é
-// injetado via deps.mpClient — nenhuma chamada de rede real acontece aqui.
+// api/payments.js (checkout, autenticado) + api/payments/webhook.js
+// (webhook, assinatura própria). Banco mockado (fake-db.js) e requireAuth
+// mockado (fake-auth.js, convenção "TEST:<uid>") como no resto da suíte.
+// O cliente do Mercado Pago é injetado via deps.mpClient — nenhuma
+// chamada de rede real acontece aqui.
 
 import { test, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,6 +20,7 @@ mock.module(requireAuthUrl, {
 });
 
 const { default: paymentsHandler } = await import('../api/payments.js');
+const { default: webhookHandler } = await import('../api/payments/webhook.js');
 
 const WEBHOOK_SECRET = 'segredo-webhook-teste';
 process.env.MERCADOPAGO_WEBHOOK_SECRET = WEBHOOK_SECRET;
@@ -53,12 +55,12 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------
-// Criação de checkout — sempre para o usuário autenticado
+// Criação de checkout (api/payments.js) — sempre para o usuário autenticado
 // ---------------------------------------------------------------------
 
 test('checkout sem token → 401, não cria preferência', async () => {
   const mp = fakeMpClient();
-  const req = makeReq({ path: '/', body: {} });
+  const req = makeReq({ body: {} });
   const res = makeRes();
   await paymentsHandler(req, res, { mpClient: mp });
   assert.equal(res.statusCode, 401);
@@ -68,7 +70,6 @@ test('checkout sem token → 401, não cria preferência', async () => {
 test('checkout autenticado usa req.user.uid como external_reference, nunca um uid do body', async () => {
   const mp = fakeMpClient();
   const req = makeReq({
-    path: '/',
     body: { uid: 'user_B', userId: 'user_B' }, // tentativa de spoof — deve ser ignorada
     headers: authHeader('user_A'),
   });
@@ -81,21 +82,34 @@ test('checkout autenticado usa req.user.uid como external_reference, nunca um ui
   assert.equal(mp.calls.createPreference[0].externalReference, 'user_A', 'external_reference deve ser sempre o autenticado, nunca o do body');
 });
 
+test('checkout constrói a notification_url apontando para /api/payments/webhook (a rota que a Vercel de fato serve)', async () => {
+  const mp = fakeMpClient();
+  process.env.APP_BASE_URL = 'https://missao-aprovacao-seven.vercel.app';
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { mpClient: mp });
+  delete process.env.APP_BASE_URL;
+
+  assert.equal(
+    mp.calls.createPreference[0].notificationUrl,
+    'https://missao-aprovacao-seven.vercel.app/api/payments/webhook'
+  );
+});
+
 // ---------------------------------------------------------------------
-// Webhook — assinatura obrigatória
+// Webhook (api/payments/webhook.js) — assinatura obrigatória, sem auth de sessão
 // ---------------------------------------------------------------------
 
 test('[segurança] webhook sem assinatura válida → 401, plano NÃO é alterado', async () => {
   const mp = fakeMpClient({ paymentsById: { pay_1: { id: 'pay_1', status: 'approved', external_reference: 'user_A', transaction_amount: 29.9, currency_id: 'BRL' } } });
   const req = makeReq({
     method: 'POST',
-    path: '/webhook',
     query: { type: 'payment', 'data.id': 'pay_1' },
     body: { type: 'payment', data: { id: 'pay_1' } },
     headers: { 'x-signature': 'ts=123,v1=assinatura-forjada', 'x-request-id': 'req-1' },
   });
   const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
+  await webhookHandler(req, res, { mpClient: mp });
 
   assert.equal(res.statusCode, 401);
   assert.equal(mp.calls.getPayment.length, 0, 'nunca deve nem consultar o pagamento sem assinatura válida');
@@ -110,13 +124,12 @@ test('webhook com assinatura válida e pagamento aprovado → usuário promovido
   });
   const req = makeReq({
     method: 'POST',
-    path: '/webhook',
     query: { type: 'payment', 'data.id': 'pay_42' },
     body: { type: 'payment', data: { id: 'pay_42' } },
     headers: signedWebhookHeaders({ dataId: 'pay_42' }),
   });
   const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
+  await webhookHandler(req, res, { mpClient: mp });
 
   assert.equal(res.statusCode, 200);
   assert.equal(store.users.user_A.plan, 'pro', 'pagamento aprovado e assinado deve liberar o PRO');
@@ -129,13 +142,12 @@ test('webhook com pagamento PENDENTE → é registrado, mas plano NÃO muda para
   });
   const req = makeReq({
     method: 'POST',
-    path: '/webhook',
     query: { type: 'payment', 'data.id': 'pay_7' },
     body: { type: 'payment', data: { id: 'pay_7' } },
     headers: signedWebhookHeaders({ dataId: 'pay_7' }),
   });
   const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
+  await webhookHandler(req, res, { mpClient: mp });
 
   assert.equal(res.statusCode, 200);
   assert.notEqual(store.users.user_A.plan, 'pro');
@@ -150,13 +162,12 @@ test('[idempotência] a mesma notificação reenviada duas vezes só processa um
   for (let i = 0; i < 2; i++) {
     const req = makeReq({
       method: 'POST',
-      path: '/webhook',
       query: { type: 'payment', 'data.id': 'pay_99' },
       body: { type: 'payment', data: { id: 'pay_99' } },
       headers: signedWebhookHeaders({ dataId: 'pay_99' }),
     });
     const res = makeRes();
-    await paymentsHandler(req, res, { mpClient: mp });
+    await webhookHandler(req, res, { mpClient: mp });
     assert.equal(res.statusCode, 200);
   }
 
@@ -168,13 +179,12 @@ test('webhook de outro tópico (não "payment") é apenas confirmado, sem proces
   const mp = fakeMpClient();
   const req = makeReq({
     method: 'POST',
-    path: '/webhook',
     query: { type: 'merchant_order', 'data.id': 'mo_1' },
     body: { type: 'merchant_order', data: { id: 'mo_1' } },
     headers: signedWebhookHeaders({ dataId: 'mo_1' }),
   });
   const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
+  await webhookHandler(req, res, { mpClient: mp });
 
   assert.equal(res.statusCode, 200);
   assert.equal(mp.calls.getPayment.length, 0);

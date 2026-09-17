@@ -5,7 +5,9 @@ import { fileURLToPath } from 'url';
 import redacaoHandler from './api/redacao.js';
 import authHandler from './api/auth.js';
 import dataHandler from './api/data.js';
+import leaderboardHandler from './api/data/leaderboard.js';
 import paymentsHandler from './api/payments.js';
+import paymentsWebhookHandler from './api/payments/webhook.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -99,13 +101,21 @@ app.all('/api/redacao', redacaoLimiter, (req, res) => {
 });
 
 // API de dados da plataforma (progresso, redações, ranking) — PostgreSQL
+// Rotas específicas SEMPRE antes da genérica (Express casa por ordem de
+// registro) — mesma topologia de arquivos que a Vercel usa em produção.
+app.get('/api/data/leaderboard', apiGeneralLimiter, (req, res) => {
+  leaderboardHandler(req, res);
+});
 app.use('/api/data', apiGeneralLimiter, (req, res) => {
   dataHandler(req, res);
 });
 
 // Pagamentos (Mercado Pago / Checkout Pro) — criação de preferência (autenticada)
 // e webhook de confirmação (público, protegido por assinatura HMAC própria)
-app.use('/api/payments', apiGeneralLimiter, (req, res) => {
+app.post('/api/payments/webhook', apiGeneralLimiter, (req, res) => {
+  paymentsWebhookHandler(req, res);
+});
+app.post('/api/payments', apiGeneralLimiter, (req, res) => {
   paymentsHandler(req, res);
 });
 
