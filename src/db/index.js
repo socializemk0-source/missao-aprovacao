@@ -1,12 +1,7 @@
-// src/db/index.ts
+// src/db/index.js
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import * as schema from './schema.ts';
-
-// Add global connection pool caching to persist across hot-reloads
-declare global {
-  var _postgresPool: Pool | undefined;
-}
+import * as schema from './schema.js';
 
 // Function to create or retrieve the connection pool.
 export const createPool = () => {

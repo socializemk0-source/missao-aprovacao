@@ -13,7 +13,7 @@ import {
   getDailyMissions,
   recordViewedTipInDb,
   getViewedTipsByUserId
-} from '../src/db/queries.ts';
+} from '../src/db/queries.js';
 
 async function runRequireAuth(req, res) {
   let authorized = false;

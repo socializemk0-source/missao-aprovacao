@@ -1,4 +1,4 @@
-import { getLeaderboard } from './db/queries.ts';
+import { getLeaderboard } from './db/queries.js';
 
 /**
  * Consulta a coleção leaderboard (PostgreSQL). Campos expostos são

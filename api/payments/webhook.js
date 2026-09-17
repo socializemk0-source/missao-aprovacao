@@ -6,7 +6,7 @@ import {
   upsertSubscription,
   getSubscriptionPaymentByMpId,
   recordSubscriptionPayment,
-} from '../../src/db/queries.ts';
+} from '../../src/db/queries.js';
 
 const PRO_PLAN_PRICE_LABEL = 'R$ 29,90';
 

@@ -1,24 +1,10 @@
-// src/db/queries.ts
-import { db } from './index.ts';
-import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.ts';
+// src/db/queries.js
+import { db } from './index.js';
+import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.js';
 import { eq, desc, and, gte } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário
-export async function getOrCreateUser(data: {
-  uid: string;
-  name: string;
-  email: string;
-  passwordHash?: string;
-  targetExam?: string;
-  preferredBanca?: string;
-  city?: string;
-  whatsapp?: string;
-  plan?: string;
-  planPrice?: string;
-  xp?: number;
-  streak?: number;
-  hearts?: number;
-}) {
+export async function getOrCreateUser(data) {
   try {
     const result = await db.insert(users)
       .values({
@@ -60,7 +46,7 @@ export async function getOrCreateUser(data: {
 }
 
 // Obter usuário por UID
-export async function getUserByUid(uid: string) {
+export async function getUserByUid(uid) {
   try {
     const result = await db.select().from(users).where(eq(users.uid, uid)).limit(1);
     return result[0] || null;
@@ -71,7 +57,7 @@ export async function getUserByUid(uid: string) {
 }
 
 // Obter usuário por email
-export async function getUserByEmail(email: string) {
+export async function getUserByEmail(email) {
   try {
     const result = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim())).limit(1);
     return result[0] || null;
@@ -82,7 +68,7 @@ export async function getUserByEmail(email: string) {
 }
 
 // Atualizar usuário
-export async function updateUser(uid: string, fields: Partial<typeof users.$inferInsert>) {
+export async function updateUser(uid, fields) {
   try {
     const result = await db.update(users)
       .set({ ...fields, updatedAt: new Date() })
@@ -96,17 +82,7 @@ export async function updateUser(uid: string, fields: Partial<typeof users.$infe
 }
 
 // Sincronizar entrada no Leaderboard
-export async function syncLeaderboardEntry(data: {
-  userId: string;
-  name: string;
-  targetExam?: string;
-  city?: string;
-  questionsAnswered?: number;
-  streak?: number;
-  xp?: number;
-  plan?: string;
-  photoUrl?: string;
-}) {
+export async function syncLeaderboardEntry(data) {
   try {
     const result = await db.insert(leaderboard)
       .values({
@@ -155,7 +131,7 @@ export async function getLeaderboard() {
 }
 
 // Salvar ou atualizar progresso detalhado
-export async function saveUserProgress(userId: string, completedPhasesJson: string, questionsAnswered: number, correctAnswers: number) {
+export async function saveUserProgress(userId, completedPhasesJson, questionsAnswered, correctAnswers) {
   try {
     const existing = await db.select().from(userProgress).where(eq(userProgress.userId, userId)).limit(1);
     if (existing.length > 0) {
@@ -188,7 +164,7 @@ export async function saveUserProgress(userId: string, completedPhasesJson: stri
 }
 
 // Obter progresso detalhado do estudante
-export async function getUserProgress(userId: string) {
+export async function getUserProgress(userId) {
   try {
     const res = await db.select().from(userProgress).where(eq(userProgress.userId, userId)).limit(1);
     return res[0] || null;
@@ -199,16 +175,7 @@ export async function getUserProgress(userId: string) {
 }
 
 // Salvar Redação
-export async function saveEssay(data: {
-  essayId: string;
-  userId: string;
-  topic: string;
-  banca?: string;
-  content: string;
-  score?: number;
-  feedback?: string;
-  criterios?: string;
-}) {
+export async function saveEssay(data) {
   try {
     const result = await db.insert(essays)
       .values({
@@ -231,7 +198,7 @@ export async function saveEssay(data: {
 }
 
 // Obter Redações por Usuário
-export async function getEssaysByUser(userId: string) {
+export async function getEssaysByUser(userId) {
   try {
     return await db.select().from(essays).where(eq(essays.userId, userId)).orderBy(desc(essays.createdAt));
   } catch (error) {
@@ -242,7 +209,7 @@ export async function getEssaysByUser(userId: string) {
 
 // Contar correções de redação de um usuário desde uma data (limite
 // semanal do Plano Grátis em api/redacao.js — o PRO não tem limite).
-export async function countRecentEssaysByUser(userId: string, since: Date) {
+export async function countRecentEssaysByUser(userId, since) {
   try {
     const rows = await db.select({ id: essays.id }).from(essays)
       .where(and(eq(essays.userId, userId), gte(essays.createdAt, since)));
@@ -254,7 +221,7 @@ export async function countRecentEssaysByUser(userId: string, since: Date) {
 }
 
 // Salvar / atualizar missão diária
-export async function updateDailyMission(userId: string, dateStr: string, missionId: string, progress: number, target: number, completed: number, claimed: number) {
+export async function updateDailyMission(userId, dateStr, missionId, progress, target, completed, claimed) {
   try {
     const existing = await db.select().from(dailyMissions)
       .where(and(eq(dailyMissions.userId, userId), eq(dailyMissions.dateStr, dateStr), eq(dailyMissions.missionId, missionId)))
@@ -293,7 +260,7 @@ export async function updateDailyMission(userId: string, dateStr: string, missio
 }
 
 // Obter missões diárias
-export async function getDailyMissions(userId: string, dateStr: string) {
+export async function getDailyMissions(userId, dateStr) {
   try {
     return await db.select().from(dailyMissions)
       .where(and(eq(dailyMissions.userId, userId), eq(dailyMissions.dateStr, dateStr)));
@@ -314,7 +281,7 @@ export async function getAllUsers() {
 }
 
 // Obter perfil do estudante vinculado a auth.users
-export async function getProfileByUserId(userId: string) {
+export async function getProfileByUserId(userId) {
   try {
     const res = await db.select().from(profiles).where(eq(profiles.id, userId)).limit(1);
     return res[0] || null;
@@ -325,15 +292,7 @@ export async function getProfileByUserId(userId: string) {
 }
 
 // Salvar ou atualizar perfil do estudante (Supabase profiles)
-export async function upsertProfile(userId: string, data: {
-  fullName: string;
-  bio?: string;
-  avatarUrl?: string;
-  targetExam?: string;
-  preferredBanca?: string;
-  city?: string;
-  phone?: string;
-}) {
+export async function upsertProfile(userId, data) {
   try {
     const result = await db.insert(profiles)
       .values({
@@ -370,7 +329,7 @@ export async function upsertProfile(userId: string, data: {
 }
 
 // Obter dicas visualizadas do estudante
-export async function getViewedTipsByUserId(userId: string) {
+export async function getViewedTipsByUserId(userId) {
   try {
     return await db.select().from(viewedTips).where(eq(viewedTips.userId, userId));
   } catch (error) {
@@ -380,7 +339,7 @@ export async function getViewedTipsByUserId(userId: string) {
 }
 
 // Buscar assinatura atual do usuário (estado local do Preapproval do MP)
-export async function getSubscriptionByUserId(userId: string) {
+export async function getSubscriptionByUserId(userId) {
   try {
     const res = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
     return res[0] || null;
@@ -391,7 +350,7 @@ export async function getSubscriptionByUserId(userId: string) {
 }
 
 // Buscar assinatura pelo ID do Preapproval no Mercado Pago (webhook)
-export async function getSubscriptionByPreapprovalId(mpPreapprovalId: string) {
+export async function getSubscriptionByPreapprovalId(mpPreapprovalId) {
   try {
     const res = await db.select().from(subscriptions).where(eq(subscriptions.mpPreapprovalId, mpPreapprovalId)).limit(1);
     return res[0] || null;
@@ -402,15 +361,7 @@ export async function getSubscriptionByPreapprovalId(mpPreapprovalId: string) {
 }
 
 // Criar ou atualizar o estado da assinatura (1 linha por usuário).
-export async function upsertSubscription(data: {
-  userId: string;
-  mpPreapprovalId?: string | null;
-  status: string;
-  plan?: string;
-  amount?: number;
-  currency?: string;
-  nextPaymentDate?: Date | null;
-}) {
+export async function upsertSubscription(data) {
   try {
     const result = await db.insert(subscriptions)
       .values({
@@ -442,7 +393,7 @@ export async function upsertSubscription(data: {
 }
 
 // Buscar cobrança recorrente já registrada por ID do Mercado Pago (chave de idempotência)
-export async function getSubscriptionPaymentByMpId(mpPaymentId: string) {
+export async function getSubscriptionPaymentByMpId(mpPaymentId) {
   try {
     const res = await db.select().from(subscriptionPayments).where(eq(subscriptionPayments.mpPaymentId, mpPaymentId)).limit(1);
     return res[0] || null;
@@ -453,14 +404,7 @@ export async function getSubscriptionPaymentByMpId(mpPaymentId: string) {
 }
 
 // Registrar cobrança recorrente processada (idempotente: onConflictDoNothing pelo mpPaymentId)
-export async function recordSubscriptionPayment(data: {
-  mpPaymentId: string;
-  mpPreapprovalId: string;
-  userId: string;
-  status: string;
-  amount?: number;
-  currency?: string;
-}) {
+export async function recordSubscriptionPayment(data) {
   try {
     const result = await db.insert(subscriptionPayments)
       .values({
@@ -482,14 +426,7 @@ export async function recordSubscriptionPayment(data: {
 }
 
 // Salvar ou atualizar dica visualizada
-export async function recordViewedTipInDb(data: {
-  userId: string;
-  tipId: string;
-  title: string;
-  banca?: string;
-  mastered?: number;
-  favorited?: number;
-}) {
+export async function recordViewedTipInDb(data) {
   try {
     const existing = await db.select().from(viewedTips)
       .where(and(eq(viewedTips.userId, data.userId), eq(viewedTips.tipId, data.tipId)))
