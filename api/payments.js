@@ -1,5 +1,6 @@
 import { requireAuth } from '../middleware/requireAuth.js';
 import { createMercadoPagoClient } from '../src/payments/mercadopago.js';
+import { upsertSubscription } from '../src/db/queries.ts';
 
 const PRO_PLAN_PRICE = 29.90;
 
@@ -20,9 +21,9 @@ function resolveAppBaseUrl(req) {
 }
 
 /**
- * POST /api/payments — cria uma preferência de checkout do Mercado Pago
- * para o PLANO PRO, sempre vinculada ao usuário autenticado (req.user.uid)
- * — nunca a um uid vindo do cliente.
+ * POST /api/payments — cria uma ASSINATURA (Preapproval) do Mercado Pago
+ * para o PLANO PRO (R$ 29,90/mês, recorrente), sempre vinculada ao usuário
+ * autenticado (req.user.uid) — nunca a um uid vindo do cliente.
  *
  * `deps.mpClient` existe só para os testes injetarem um cliente falso —
  * em produção sempre usa o client real (Access Token do ambiente).
@@ -40,25 +41,30 @@ export default async function paymentsHandler(req, res, deps = {}) {
 
   try {
     const baseUrl = resolveAppBaseUrl(req);
-    const preference = await mpClient.createPreference({
-      title: 'Missão Aprovação — Plano PRO (acesso completo)',
+    const subscription = await mpClient.createSubscription({
+      reason: 'Missão Aprovação — Plano PRO (assinatura mensal)',
       price: PRO_PLAN_PRICE,
       externalReference: req.user.uid,
-      backUrls: {
-        success: `${baseUrl}/?payment=success`,
-        pending: `${baseUrl}/?payment=pending`,
-        failure: `${baseUrl}/?payment=failure`,
-      },
+      backUrl: `${baseUrl}/?payment=success`,
       notificationUrl: `${baseUrl}/api/payments/webhook`,
+    });
+
+    // Estado local otimista (pending) — o webhook subscription_preapproval
+    // é quem confirma "authorized" de verdade e libera o PRO.
+    await upsertSubscription({
+      userId: req.user.uid,
+      mpPreapprovalId: subscription.id,
+      status: subscription.status || 'pending',
+      amount: PRO_PLAN_PRICE,
     });
 
     return res.status(200).json({
       success: true,
-      checkoutUrl: preference.init_point,
-      preferenceId: preference.id,
+      checkoutUrl: subscription.init_point,
+      preapprovalId: subscription.id,
     });
   } catch (err) {
-    console.error('[Payments] Erro ao criar preferência de checkout:', err.message);
-    return res.status(502).json({ success: false, error: 'Não foi possível iniciar o pagamento. Tente novamente em instantes.' });
+    console.error('[Payments] Erro ao criar assinatura:', err.message);
+    return res.status(502).json({ success: false, error: 'Não foi possível iniciar a assinatura. Tente novamente em instantes.' });
   }
 }

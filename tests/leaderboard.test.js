@@ -26,3 +26,18 @@ test('GET /api/data/leaderboard não exige autenticação e nunca inclui campos 
     assert.equal(entry.plan, undefined);
   }
 });
+
+test('[honestidade] quando o banco falha, a rota NUNCA finge sucesso com lista vazia — responde erro explícito', async () => {
+  store.__forceLeaderboardError = new Error('connect ECONNREFUSED 127.0.0.1:5432');
+  try {
+    const req = makeReq({ method: 'GET' });
+    const res = makeRes();
+    await leaderboardHandler(req, res);
+
+    assert.notEqual(res.statusCode, 200, 'não deve responder 200 quando o banco está fora do ar');
+    assert.equal(res.body.success, false);
+    assert.ok(!('entries' in res.body) || res.body.entries === undefined, 'não deve fingir uma lista vazia bem-sucedida');
+  } finally {
+    delete store.__forceLeaderboardError;
+  }
+});
