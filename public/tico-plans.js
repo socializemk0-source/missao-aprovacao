@@ -544,6 +544,13 @@
     },
 
     injectHeaderTrigger(isPro) {
+      // Nas próprias páginas de cadastro/entrar, um botão flutuante
+      // "Cadastrar / Entrar" não faz sentido (o usuário já está lá).
+      if (/^\/(cadastro|entrar)(\/|$)/.test(window.location.pathname)) {
+        document.getElementById('tico-user-account-btn')?.remove();
+        return;
+      }
+
       const targetSelectors = [
         '.vlp-header-actions',
         '.account-header',
