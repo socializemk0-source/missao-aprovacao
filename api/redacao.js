@@ -356,13 +356,22 @@ var essayTopics = [
 	}
 ];
 var wordCount = (text) => text.trim() ? text.trim().split(/\s+/u).length : 0;
+// A IA às vezes cita um trecho real do aluno, mas troca uma quebra de
+// linha por um espaço (comportamento comum de LLM ao reproduzir uma
+// frase). Isso não é uma invenção — é a mesma frase, só reespaçada — mas
+// `text.includes(a.quote)` bruto rejeitava como se fosse. Normaliza só
+// espaços em branco (nunca letras/pontuação) antes de comparar, então o
+// requisito "o trecho tem que existir de verdade no texto do aluno"
+// continua de pé.
+var normalizeWhitespaceForQuoteMatch = (s) => s.replace(/\s+/g, " ").trim();
 function validEssayReport(value, text) {
 	const r = value;
 	const str = (v) => typeof v === "string" && v.length > 0 && v.length <= 1800;
+	const normalizedText = normalizeWhitespaceForQuoteMatch(text);
 	return !!r && str(r.summary) && Array.isArray(r.criteria) && r.criteria.length === 4 && essayCriteria.every((c) => {
 		const found = r.criteria.filter((x) => x && x.id === c.id);
 		return found.length === 1 && Number.isInteger(found[0].score) && found[0].score >= 0 && found[0].score <= c.max && str(found[0].reason);
-	}) && Array.isArray(r.annotations) && r.annotations.length <= 8 && r.annotations.every((a) => !!a && str(a.quote) && text.includes(a.quote) && str(a.issue) && str(a.suggestion)) && Array.isArray(r.strengths) && r.strengths.length <= 4 && r.strengths.every(str) && Array.isArray(r.nextSteps) && r.nextSteps.length >= 1 && r.nextSteps.length <= 4 && r.nextSteps.every(str);
+	}) && Array.isArray(r.annotations) && r.annotations.length <= 8 && r.annotations.every((a) => !!a && str(a.quote) && normalizedText.includes(normalizeWhitespaceForQuoteMatch(a.quote)) && str(a.issue) && str(a.suggestion)) && Array.isArray(r.strengths) && r.strengths.length <= 4 && r.strengths.every(str) && Array.isArray(r.nextSteps) && r.nextSteps.length >= 1 && r.nextSteps.length <= 4 && r.nextSteps.every(str);
 }
 //#endregion
 //#region server/essay.ts
@@ -548,7 +557,10 @@ async function handleEssay(request, env, send = fetch) {
 		} catch {
 			return failure("IA_JSON_INVALIDO", "A IA retornou uma avaliação em formato ilegível.");
 		}
-		if (!validEssayReport(report, body.text)) return failure(Array.isArray(report?.annotations) && report.annotations.some((a) => typeof a?.quote === "string" && !body.text.includes(a.quote)) ? "IA_TRECHO_DIVERGENTE" : "IA_AVALIACAO_INVALIDA", "A avaliação não passou pela conferência de notas, critérios ou trechos citados. Nenhuma nota foi registrada.");
+		if (!validEssayReport(report, body.text)) {
+			const normalizedText = normalizeWhitespaceForQuoteMatch(body.text);
+			return failure(Array.isArray(report?.annotations) && report.annotations.some((a) => typeof a?.quote === "string" && !normalizedText.includes(normalizeWhitespaceForQuoteMatch(a.quote))) ? "IA_TRECHO_DIVERGENTE" : "IA_AVALIACAO_INVALIDA", "A avaliação não passou pela conferência de notas, critérios ou trechos citados. Nenhuma nota foi registrada.");
+		}
 		return json({ report });
 	} catch (error) {
 		if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return failure("IA_TEMPO_ESGOTADO", "O serviço de IA não concluiu a solicitação no prazo.");
@@ -557,7 +569,7 @@ async function handleEssay(request, env, send = fetch) {
 }
 //#endregion
 //#region api/redacao.ts
-async function handler(req, res) {
+async function handler(req, res, deps = {}) {
 	let raw = "";
 	if (req.method === "POST") if (req.body !== void 0) raw = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
 	else for await (const chunk of req) {
@@ -575,10 +587,10 @@ async function handler(req, res) {
 		method: req.method,
 		headers,
 		...req.method === "POST" ? { body: raw } : {}
-	}), process.env);
+	}), process.env, deps.send);
 	res.statusCode = response.status;
 	response.headers.forEach((v, k) => res.setHeader(k, v));
 	res.end(await response.text());
 }
 //#endregion
-export { handler as default };
+export { handler as default, handleEssay };
