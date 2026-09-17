@@ -317,6 +317,15 @@ export const essayScore = (r: EssayReport) =>
   r.criteria.reduce((n, c) => n + c.score, 0);
 export const wordCount = (text: string) =>
   text.trim() ? text.trim().split(/\s+/u).length : 0;
+// A IA às vezes cita um trecho real do aluno, mas troca uma quebra de
+// linha por um espaço (comportamento comum de LLM ao reproduzir uma
+// frase). Isso não é uma invenção — é a mesma frase, só reespaçada — mas
+// `text.includes(a.quote)` bruto rejeitava como se fosse. Normaliza só
+// espaços em branco (nunca letras/pontuação) antes de comparar, então o
+// requisito "o trecho tem que existir de verdade no texto do aluno"
+// continua de pé.
+export const normalizeWhitespaceForQuoteMatch = (s: string) =>
+  s.replace(/\s+/g, ' ').trim();
 export function validEssayReport(
   value: unknown,
   text: string,
@@ -324,6 +333,7 @@ export function validEssayReport(
   const r = value as EssayReport;
   const str = (v: unknown) =>
     typeof v === 'string' && v.length > 0 && v.length <= 1800;
+  const normalizedText = normalizeWhitespaceForQuoteMatch(text);
   return (
     !!r &&
     str(r.summary) &&
@@ -345,7 +355,7 @@ export function validEssayReport(
       (a) =>
         !!a &&
         str(a.quote) &&
-        text.includes(a.quote) &&
+        normalizedText.includes(normalizeWhitespaceForQuoteMatch(a.quote)) &&
         str(a.issue) &&
         str(a.suggestion),
     ) &&
