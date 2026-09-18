@@ -97,6 +97,16 @@ test('checkout autenticado usa req.user.uid como external_reference, nunca um ui
   assert.equal(store.subscriptions.user_A.mpPreapprovalId, 'sub_123', 'salva o estado local (pending) já na criação');
 });
 
+test('checkout envia payer_email do usuário autenticado — o Mercado Pago rejeita a criação da assinatura sem ele', async () => {
+  const mp = fakeMpClient();
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { mpClient: mp });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(mp.calls.createSubscription[0].payerEmail, 'user_A@test.local');
+});
+
 test('checkout constrói a notification_url apontando para /api/payments/webhook (a rota que a Vercel de fato serve)', async () => {
   const mp = fakeMpClient();
   process.env.APP_BASE_URL = 'https://missao-aprovacao-lemon.vercel.app';

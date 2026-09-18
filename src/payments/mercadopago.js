@@ -26,13 +26,17 @@ export function createMercadoPagoClient({ accessToken = process.env.MERCADOPAGO_
 
   // Cria a assinatura (Preapproval) e devolve o init_point para onde o
   // usuário deve ser redirecionado para autorizar a cobrança recorrente.
-  async function createSubscription({ reason, price, externalReference, backUrl, notificationUrl }) {
+  async function createSubscription({ reason, price, externalReference, payerEmail, backUrl, notificationUrl }) {
     const res = await fetchImpl(`${MP_API_BASE}/preapproval`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
         reason,
         external_reference: externalReference,
+        // Obrigatório pelo Mercado Pago ao criar uma assinatura sem um
+        // preapproval_plan_id associado — sem isso a API responde 400
+        // "payer_email is required" e a assinatura nunca é criada.
+        payer_email: payerEmail,
         back_url: backUrl,
         notification_url: notificationUrl,
         auto_recurring: {

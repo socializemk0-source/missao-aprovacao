@@ -45,6 +45,7 @@ export default async function paymentsHandler(req, res, deps = {}) {
       reason: 'Missão Aprovação — Plano PRO (assinatura mensal)',
       price: PRO_PLAN_PRICE,
       externalReference: req.user.uid,
+      payerEmail: req.user.email,
       backUrl: `${baseUrl}/?payment=success`,
       notificationUrl: `${baseUrl}/api/payments/webhook`,
     });
