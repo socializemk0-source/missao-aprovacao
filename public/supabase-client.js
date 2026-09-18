@@ -227,7 +227,7 @@ export function subscribeAuth(callback) {
   const handleCustom = (e) => callback(e.detail);
   window.addEventListener('auth_state_changed', handleCustom);
 
-  const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+  const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_OUT' || !session?.user) {
       if (event === 'SIGNED_OUT') persistUser(null);
       return;
@@ -235,7 +235,38 @@ export function subscribeAuth(callback) {
     // Sessão renovada/restaurada: não sobrescreve o perfil já em cache,
     // só garante que subscribers recebam o usuário atual.
     const current = getCurrentUser();
-    if (current && current.uid === session.user.id) callback(current);
+    if (current && current.uid === session.user.id) {
+      callback(current);
+      return;
+    }
+    // Sessão nova sem nada em cache local ainda — é o caso de um login
+    // via OAuth por redirecionamento (ex.: Google): o Supabase já
+    // autenticou a sessão sozinho ao carregar a página de volta, mas
+    // ninguém buscou o perfil da aplicação nem avisou o resto do app.
+    // Sem isto, a pessoa fica autenticada no Supabase mas o app nunca
+    // percebe (nenhum lugar chama persistUser).
+    try {
+      const res = await authFetch('/api/auth?action=get-profile');
+      const payload = await res.json().catch(() => ({}));
+      const user = {
+        uid: session.user.id,
+        email: session.user.email,
+        name: session.user.user_metadata?.name || 'Concurseiro(a)',
+        plan: 'free',
+        ...(payload?.profile || {}),
+      };
+      persistUser(user);
+      callback(user);
+      // Login concluído a partir da landing page (destino fixo do
+      // redirectTo do OAuth) — segue pro jogo, como o resto do fluxo de
+      // login já faz.
+      if (window.location.pathname === '/') {
+        window.location.href = '/jogar';
+      }
+    } catch (_) {
+      // Servidor indisponível agora — não temos como hidratar o perfil,
+      // mas não vale a pena travar o resto da UI por isso.
+    }
   });
 
   return () => {
