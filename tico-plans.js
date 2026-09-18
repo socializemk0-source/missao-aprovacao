@@ -42,60 +42,27 @@
     }
   };
 
-  // Dados do comparativo Grátis vs PRO (renderizados como cards no modal)
-  const PLAN_COMPARISON = [
-    {
-      icon: '💖',
-      title: 'Vidas / Corações',
-      subtitle: 'Margem para errar e aprender',
-      free: '5 Vidas',
-      freeNote: 'Espera recarregar ao zerar',
-      pro: 'Vidas Infinitas (∞)',
-      proNote: 'Estude sem parar nem travar',
-    },
-    {
-      icon: '🗺️',
-      title: 'Trilha do Edital',
-      subtitle: 'Capítulos e fases mapeadas',
-      free: 'Capítulos 1 a 5',
-      freeNote: 'Foco nas matérias base',
-      pro: '37 Capítulos & 111 Fases',
-      proNote: '100% do edital completo',
-    },
-    {
-      icon: '✍️',
-      title: 'Oficina de Redação com IA',
-      subtitle: 'Correções do Professor Tico',
-      free: '1 por semana',
-      freeNote: 'Avaliação preliminar',
-      pro: 'Submissões Ilimitadas',
-      proNote: 'Com espelho oficial e reescrita',
-    },
-    {
-      icon: '🏛️',
-      title: 'Bancas Examinadoras',
-      subtitle: 'Critérios de correção',
-      free: 'Básico',
-      freeNote: 'Cebraspe simplificado',
-      pro: 'Cebraspe, FGV, FCC, Vunesp',
-      proNote: 'Modelos e esqueletos oficiais',
-    },
-    {
-      icon: '📊',
-      title: 'Raio-X de Fraquezas',
-      subtitle: 'Diagnóstico pedagógico',
-      free: '✕ Não incluso',
-      pro: '✓ Raio-X Detalhado',
-      proNote: 'Mapeia onde você mais erra',
-    },
-    {
-      icon: '🏆',
-      title: 'Selo VIP no Ranking',
-      subtitle: 'Destaque entre concorrentes',
-      free: 'Padrão',
-      pro: '⭐ Selo Dourado PRO',
-    },
-  ];
+  // Ícone por categoria de recurso, usado nos dois cards de preço (Grátis / PRO)
+  const FEATURE_ICONS = {
+    hearts: '💖',
+    chapters: '🗺️',
+    redacao: '✍️',
+    bancas: '🏛️',
+    simulados: '⏱️',
+    ranking: '🏆',
+  };
+
+  const CHECK_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+  // Monta a lista de recursos de um plano (mesma ordem/chaves de PLAN_CONFIG.freeFeatures e .proFeatures)
+  function renderFeatureList(featuresObj, variant) {
+    return Object.keys(featuresObj).map((key) => `
+      <li class="tico-pricing-feature-item">
+        <span class="tico-pricing-feature-icon ${variant}">${variant === 'pro' ? CHECK_ICON_SVG : FEATURE_ICONS[key] || '•'}</span>
+        <span>${featuresObj[key]}</span>
+      </li>
+    `).join('');
+  }
 
   // Gerenciador central do estado do Plano
   const TicoPlan = {
@@ -400,78 +367,64 @@
           </p>
         </div>
 
-        <!-- Preço e Chamada de Valor -->
-        <div class="tico-plan-pricing-banner ${isPro ? 'is-pro-active' : ''}">
-          <div class="tico-plan-price-left">
-            <span class="tico-plan-price-label">${isPro ? 'STATUS ATUAL DA CONTA' : 'ASSINATURA MENSAL'}</span>
-            <div class="tico-plan-price-row">
-              <span class="tico-plan-price-currency">R$</span>
-              <span class="tico-plan-price-val">29</span>
-              <span class="tico-plan-price-cents">,90</span>
-              <span class="tico-plan-price-period">/ mês</span>
-            </div>
-            <span class="tico-plan-price-subtext">
-              ${isPro ? '✨ Assinatura Ativa · Renovação automática mensal' : 'Menos de R$ 1,00 por dia · Cancele quando quiser, sem multa'}
-            </span>
-          </div>
-          <div class="tico-plan-price-right">
-            ${isPro ? `
-              <div class="tico-plan-badge-pro-stamp">
-                <span>⭐ CONCURSEIRO VIP</span>
-                <small>Plano PRO Ativo</small>
+        <!-- Cards de preço lado a lado: Grátis vs PRO -->
+        <div class="tico-pricing-grid">
+          <div class="tico-pricing-card">
+            <div class="tico-pricing-card-head">
+              <h3 class="tico-pricing-plan-name">Grátis</h3>
+              <p class="tico-pricing-plan-desc">Para começar a treinar sem compromisso</p>
+              <div class="tico-pricing-price-row">
+                <span class="tico-pricing-currency">R$</span>
+                <span class="tico-pricing-amount">0</span>
+                <span class="tico-pricing-period">/ sempre</span>
               </div>
-            ` : `
-              <button type="button" class="tico-plan-cta-button pulse" id="tico-confirm-pro-btn">
-                <span>Assinar por R$ 29,90/mês</span>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
-              </button>
-            `}
+            </div>
+            <div class="tico-pricing-card-body">
+              ${isPro
+                ? `<button type="button" class="tico-pricing-cta-ghost" id="tico-toggle-free-btn">Cancelar assinatura e voltar para o Grátis</button>`
+                : `<div class="tico-pricing-cta-ghost is-current">Seu plano atual</div>`}
+              <ul class="tico-pricing-feature-list">
+                ${renderFeatureList(PLAN_CONFIG.freeFeatures, 'free')}
+              </ul>
+            </div>
+          </div>
+
+          <div class="tico-pricing-card popular ${isPro ? 'is-active' : ''}">
+            <div class="tico-pricing-badge-popular">${isPro ? '✓ Plano Ativo' : '⭐ Recomendado'}</div>
+            <div class="tico-pricing-card-head">
+              <h3 class="tico-pricing-plan-name">PRO</h3>
+              <p class="tico-pricing-plan-desc">Edital completo + redações ilimitadas com IA</p>
+              <div class="tico-pricing-price-row">
+                <span class="tico-pricing-currency">R$</span>
+                <span class="tico-pricing-amount">29<span class="tico-pricing-cents">,90</span></span>
+                <span class="tico-pricing-period">/ mês</span>
+              </div>
+              <span class="tico-pricing-price-subtext">
+                ${isPro ? '✨ Assinatura ativa · renovação automática mensal' : 'Menos de R$ 1,00 por dia · cancele quando quiser'}
+              </span>
+            </div>
+            <div class="tico-pricing-card-body">
+              ${isPro
+                ? `<div class="tico-pricing-active-stamp">👑 Assinatura Ativa</div>`
+                : `<button type="button" class="tico-plan-cta-button tico-pricing-cta-full pulse" id="tico-confirm-pro-btn">
+                    <span>Assinar agora</span>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  </button>`}
+              <ul class="tico-pricing-feature-list pro">
+                ${renderFeatureList(PLAN_CONFIG.proFeatures, 'pro')}
+              </ul>
+            </div>
           </div>
         </div>
         <p id="tico-plan-checkout-error" class="tico-plan-checkout-error" hidden></p>
 
-        <!-- Comparativo Grátis vs PRO, em cards (mesma linguagem visual do resto do app) -->
-        <div class="tico-plan-compare-box">
-          <h3 class="tico-plan-compare-title">Compare o Modo Grátis com o Modo PRO</h3>
-          <div class="tico-compare-grid">
-            ${PLAN_COMPARISON.map(item => `
-              <div class="tico-compare-card">
-                <div class="tico-compare-card-head">
-                  <span class="tico-compare-icon">${item.icon}</span>
-                  <div>
-                    <strong>${item.title}</strong>
-                    ${item.subtitle ? `<small>${item.subtitle}</small>` : ''}
-                  </div>
-                </div>
-                <div class="tico-compare-row">
-                  <div class="tico-compare-col free">
-                    <span class="tico-compare-tag">Grátis</span>
-                    <strong>${item.free}</strong>
-                    ${item.freeNote ? `<small>${item.freeNote}</small>` : ''}
-                  </div>
-                  <div class="tico-compare-col pro">
-                    <span class="tico-compare-tag">PRO</span>
-                    <strong>${item.pro}</strong>
-                    ${item.proNote ? `<small>${item.proNote}</small>` : ''}
-                  </div>
-                </div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        <!-- Rodapé: nota de segurança (não-PRO) ou cancelar assinatura (PRO) -->
+        <!-- Rodapé: nota de segurança (não-PRO) ou confirmação (PRO) -->
         <div class="tico-plan-footer-section">
-          ${isPro ? `
-            <p class="tico-plan-success-notice">✅ Sua assinatura PRO de R$ 29,90/mês está ativa nesta conta.</p>
-            <button type="button" class="tico-btn-toggle-test" id="tico-toggle-free-btn">
-              Cancelar assinatura e voltar para o Grátis
-            </button>
-          ` : `
-            <p class="tico-plan-security-note">
-              🔒 Pagamento seguro via Mercado Pago (PIX, cartão ou boleto) · Garantia de 7 dias ou seu dinheiro de volta
-            </p>
-          `}
+          ${isPro
+            ? `<p class="tico-plan-success-notice">✅ Sua assinatura PRO de R$ 29,90/mês está ativa nesta conta.</p>`
+            : `<p class="tico-plan-security-note">
+                🔒 Pagamento seguro via Mercado Pago (PIX, cartão ou boleto) · Garantia de 7 dias ou seu dinheiro de volta
+              </p>`}
         </div>
       `;
 

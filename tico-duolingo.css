@@ -5657,6 +5657,27 @@ aside.sidebar::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Micro-interação: Tico reage a um toque com um pulinho animado e uma
+   pose alegre do próprio sprite (o sprite de mascot.png já tem 6 poses
+   numa grade 3x2, mas só a pose padrão — 0% 0% — era usada em qualquer
+   lugar; as outras 5 nunca apareciam). Ver tico-mascot-animations.js. */
+@keyframes tico-cheer-pop {
+  0% { transform: scale(1) rotate(0deg); }
+  30% { transform: scale(1.18, 0.85) rotate(-6deg); }
+  55% { transform: scale(0.92, 1.12) rotate(4deg) translateY(-10px); }
+  75% { transform: scale(1.06, 0.96) rotate(-2deg) translateY(2px); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+.mascot.tico-reacting {
+  animation: tico-cheer-pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.mascot.tico-frame-cheer1 { background-position: 50% 0% !important; }
+.mascot.tico-frame-cheer2 { background-position: 100% 0% !important; }
+.mascot.tico-frame-cheer3 { background-position: 50% 100% !important; }
+.mascot.tico-frame-cheer4 { background-position: 100% 100% !important; }
+
 /* ==========================================================================
    OTIMIZAÇÕES DE PERFORMANCE E ACESSIBILIDADE MOBILE
    - Zero atraso de clique (elimina 300ms de touch latency)
@@ -5954,85 +5975,195 @@ button, a, input, select, textarea, .mascot, .vlp-phase-btn, .fcm-bell-btn, .ban
   line-height: 1.5;
 }
 
-/* Banner de Preço — mesmo padrão dos cards claros usados no resto do app
-   (gradiente pastel + borda de 2px + borda inferior mais grossa) */
-.tico-plan-pricing-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: linear-gradient(135deg, #fef9c3 0%, #fef08a 100%);
-  color: #78350f;
-  border: 2px solid #fde047;
-  border-bottom: 4px solid #eab308;
-  padding: 20px 24px;
-  border-radius: 18px;
-  margin-bottom: 24px;
+/* Cards de preço lado a lado (Grátis vs PRO), com o plano recomendado
+   destacado por borda azul + selo — mesma paleta usada no resto do app. */
+.tico-pricing-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
-  box-shadow: 0 4px 14px rgba(202, 138, 4, 0.15);
+  margin-bottom: 24px;
 }
 
-.tico-plan-pricing-banner.is-pro-active {
-  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-  border-color: #bbf7d0;
-  border-bottom-color: #86efac;
-  color: #14532d;
-  box-shadow: 0 4px 14px rgba(22, 101, 52, 0.12);
+.tico-pricing-card {
+  position: relative;
+  background: #ffffff;
+  border: 2px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 22px 20px;
+  display: flex;
+  flex-direction: column;
 }
 
-.tico-plan-price-label {
-  display: block;
+.tico-pricing-card.popular {
+  border-color: #3b82f6;
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 55%);
+  box-shadow: 0 10px 28px rgba(59, 130, 246, 0.18);
+}
+
+.tico-pricing-card.popular.is-active {
+  border-color: #22c55e;
+  background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 55%);
+  box-shadow: 0 10px 28px rgba(34, 197, 94, 0.18);
+}
+
+.tico-pricing-badge-popular {
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: #ffffff;
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: #92400e;
-  margin-bottom: 4px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 14px;
+  border-radius: 9999px;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
+  white-space: nowrap;
 }
 
-.tico-plan-pricing-banner.is-pro-active .tico-plan-price-label {
-  color: #166534;
+.tico-pricing-card.is-active .tico-pricing-badge-popular {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  box-shadow: 0 4px 10px rgba(22, 163, 74, 0.35);
 }
 
-.tico-plan-price-row {
+.tico-pricing-card-head {
+  text-align: left;
+  margin-bottom: 16px;
+}
+
+.tico-pricing-plan-name {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 4px 0 4px;
+}
+
+.tico-pricing-plan-desc {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 12px;
+  min-height: 32px;
+}
+
+.tico-pricing-price-row {
   display: flex;
   align-items: baseline;
   gap: 2px;
 }
 
-.tico-plan-price-currency {
-  font-size: 18px;
+.tico-pricing-currency {
+  font-size: 16px;
   font-weight: 700;
+  color: #0f172a;
 }
 
-.tico-plan-price-val {
-  font-size: 38px;
+.tico-pricing-amount {
+  font-size: 34px;
   font-weight: 900;
+  color: #0f172a;
   line-height: 1;
 }
 
-.tico-plan-price-cents {
-  font-size: 20px;
+.tico-pricing-cents {
+  font-size: 18px;
   font-weight: 800;
 }
 
-.tico-plan-price-period {
+.tico-pricing-period {
   font-size: 13px;
-  color: #92400e;
-  margin-left: 6px;
+  color: #64748b;
+  margin-left: 4px;
 }
 
-.tico-plan-pricing-banner.is-pro-active .tico-plan-price-period {
-  color: #166534;
-}
-
-.tico-plan-price-subtext {
+.tico-pricing-price-subtext {
   display: block;
-  font-size: 12px;
-  color: #a16207;
+  font-size: 11px;
+  color: #2563eb;
+  font-weight: 600;
   margin-top: 4px;
 }
 
-.tico-plan-pricing-banner.is-pro-active .tico-plan-price-subtext {
-  color: #15803d;
+.tico-pricing-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tico-pricing-cta-ghost {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.tico-pricing-cta-ghost:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.tico-pricing-cta-ghost.is-current {
+  cursor: default;
+  color: #94a3b8;
+}
+
+.tico-pricing-cta-full {
+  width: 100%;
+  justify-content: center;
+}
+
+.tico-pricing-active-stamp {
+  text-align: center;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  color: #166534;
+  font-weight: 800;
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+
+.tico-pricing-feature-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tico-pricing-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.4;
+}
+
+.tico-pricing-feature-icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  background: #f1f5f9;
+}
+
+.tico-pricing-feature-icon.pro {
+  background: #dbeafe;
+  color: #2563eb;
 }
 
 .tico-plan-cta-button {
@@ -6054,107 +6185,6 @@ button, a, input, select, textarea, .mascot, .vlp-phase-btn, .fcm-bell-btn, .ban
 
 .tico-plan-cta-button:hover {
   transform: translateY(-1px);
-}
-
-/* Tabela Comparativa */
-.tico-plan-compare-box {
-  margin-bottom: 24px;
-}
-
-.tico-plan-compare-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #0f172a;
-  margin-bottom: 12px;
-}
-
-/* Comparativo Grátis vs PRO em cards — mesma linguagem visual (gradiente
-   pastel + borda 2px + borda inferior mais grossa) dos cards do resto do app */
-.tico-compare-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.tico-compare-card {
-  background: #ffffff;
-  border: 2px solid #e2e8f0;
-  border-bottom: 4px solid #cbd5e1;
-  border-radius: 14px;
-  padding: 14px 16px;
-}
-
-.tico-compare-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.tico-compare-icon {
-  font-size: 20px;
-  line-height: 1;
-}
-
-.tico-compare-card-head strong {
-  display: block;
-  font-size: 14px;
-  color: #0f172a;
-}
-
-.tico-compare-card-head small {
-  font-size: 11px;
-  color: #64748b;
-}
-
-.tico-compare-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.tico-compare-col {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
-  border-radius: 10px;
-}
-
-.tico-compare-col.free {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-}
-
-.tico-compare-col.pro {
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-}
-
-.tico-compare-tag {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #94a3b8;
-}
-
-.tico-compare-col.pro .tico-compare-tag {
-  color: #16a34a;
-}
-
-.tico-compare-col strong {
-  font-size: 13px;
-  color: #334155;
-}
-
-.tico-compare-col.pro strong {
-  color: #15803d;
-}
-
-.tico-compare-col small {
-  font-size: 11px;
-  color: #64748b;
 }
 
 .tico-plan-checkout-error {
@@ -6368,27 +6398,9 @@ button, a, input, select, textarea, .mascot, .vlp-phase-btn, .fcm-bell-btn, .ban
   color: #166534;
 }
 
-.tico-btn-toggle-test {
-  background: #f1f5f9;
-  border: 1px solid #cbd5e1;
-  padding: 8px 14px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
-  margin-top: 8px;
-}
-
-.tico-btn-toggle-test:hover {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
 @media (max-width: 640px) {
-  .tico-plan-pricing-banner {
-    flex-direction: column;
-    align-items: flex-start;
+  .tico-pricing-grid {
+    grid-template-columns: 1fr;
   }
   .tico-plan-cta-button {
     width: 100%;
