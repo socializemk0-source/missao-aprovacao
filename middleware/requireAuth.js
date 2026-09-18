@@ -36,7 +36,18 @@ async function defaultVerifyToken(token) {
   const supabase = await getSupabaseClient();
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data?.user?.id) return null;
-  return { uid: data.user.id, email: data.user.email || null };
+  // user_metadata vem do que foi passado em supabase.auth.signUp({options:{data}})
+  // no cadastro — usado só como fallback para AUTORRECUPERAR o perfil de
+  // aplicação de um usuário já confirmado que nunca teve essa linha criada
+  // (ver api/auth.js, ação get-profile). Nunca é a fonte de autorização.
+  const metadata = data.user.user_metadata || {};
+  return {
+    uid: data.user.id,
+    email: data.user.email || null,
+    name: typeof metadata.name === 'string' ? metadata.name : null,
+    whatsapp: typeof metadata.whatsapp === 'string' ? metadata.whatsapp : null,
+    cidade: typeof metadata.cidade === 'string' ? metadata.cidade : null,
+  };
 }
 
 // Extrai o token do header "Authorization: Bearer <token>".
