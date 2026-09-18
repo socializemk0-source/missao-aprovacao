@@ -110,6 +110,29 @@ function persistUser(user) {
   window.dispatchEvent(new CustomEvent('auth_state_changed', { detail: user }));
 }
 
+// Busca (e autorrecupera, se for a primeira vez) o perfil de um usuário que
+// já está autenticado no Supabase mas ainda não tem nada em cache local —
+// o caso de um login via OAuth por redirecionamento (ex.: Google): o
+// Supabase autentica a sessão sozinho ao carregar a página de volta, mas
+// sem isto a pessoa fica autenticada "por dentro" e o app nunca percebe.
+async function hydrateSessionUser(session) {
+  try {
+    const res = await authFetch('/api/auth?action=get-profile');
+    const payload = await res.json().catch(() => ({}));
+    const user = {
+      uid: session.user.id,
+      email: session.user.email,
+      name: session.user.user_metadata?.name || 'Concurseiro(a)',
+      plan: 'free',
+      ...(payload?.profile || {}),
+    };
+    persistUser(user);
+    return user;
+  } catch (_) {
+    return null;
+  }
+}
+
 // -----------------------------------------------------------------------
 // Cadastro / login — sempre via Supabase Auth (nunca senha no nosso backend)
 // -----------------------------------------------------------------------
@@ -239,34 +262,11 @@ export function subscribeAuth(callback) {
       callback(current);
       return;
     }
-    // Sessão nova sem nada em cache local ainda — é o caso de um login
-    // via OAuth por redirecionamento (ex.: Google): o Supabase já
-    // autenticou a sessão sozinho ao carregar a página de volta, mas
-    // ninguém buscou o perfil da aplicação nem avisou o resto do app.
-    // Sem isto, a pessoa fica autenticada no Supabase mas o app nunca
-    // percebe (nenhum lugar chama persistUser).
-    try {
-      const res = await authFetch('/api/auth?action=get-profile');
-      const payload = await res.json().catch(() => ({}));
-      const user = {
-        uid: session.user.id,
-        email: session.user.email,
-        name: session.user.user_metadata?.name || 'Concurseiro(a)',
-        plan: 'free',
-        ...(payload?.profile || {}),
-      };
-      persistUser(user);
-      callback(user);
-      // Login concluído a partir da landing page (destino fixo do
-      // redirectTo do OAuth) — segue pro jogo, como o resto do fluxo de
-      // login já faz.
-      if (window.location.pathname === '/') {
-        window.location.href = '/jogar';
-      }
-    } catch (_) {
-      // Servidor indisponível agora — não temos como hidratar o perfil,
-      // mas não vale a pena travar o resto da UI por isso.
-    }
+    // Sessão nova sem nada em cache local ainda (ex.: outra aba acabou de
+    // logar, ou o carregamento inicial da página ainda não tinha rodado
+    // quando este listener foi registrado).
+    const user = await hydrateSessionUser(session);
+    if (user) callback(user);
   });
 
   return () => {
@@ -633,5 +633,26 @@ if (typeof window !== 'undefined') {
   window.FirebaseApplet = SupabaseApplet; // alias retrocompatível para tico-*.js
   window.MissaoFirebase = SupabaseApplet;
 }
+
+// -----------------------------------------------------------------------
+// Login por OAuth (Google) volta pra página inicial após o redirecionamento
+// do provedor — não passa por /cadastro nem /entrar, então nenhum código
+// desses formulários roda. Sem isto, quem loga com Google fica autenticado
+// no Supabase mas o app nunca chega a perceber (subscribeAuth só é
+// escutado por quem chama, e a landing page não chama). Roda uma vez, sem
+// depender de nenhum componente pedir isso.
+(async function hydrateFreshSessionOnLoad() {
+  try {
+    if (getCurrentUser()) return; // já tem cache local — nada a fazer aqui
+    const { data } = await supabase.auth.getSession();
+    if (!data?.session?.user) return;
+    const user = await hydrateSessionUser(data.session);
+    if (user && window.location.pathname === '/') {
+      window.location.href = '/jogar';
+    }
+  } catch (_) {
+    // Sem sessão válida ainda (ou servidor indisponível) — segue normal.
+  }
+})();
 
 export default SupabaseApplet;

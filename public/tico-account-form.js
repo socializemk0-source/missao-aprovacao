@@ -32,6 +32,22 @@
 
   function enhance(card) {
     if (card.dataset.ticoAccountReady === 'true') return;
+
+    // Quem já está logado (ex.: acabou de voltar do login por Google, ou
+    // simplesmente ainda tem a sessão de antes) não deveria ver o
+    // formulário de novo ao cair em /cadastro ou /entrar. Lê o
+    // localStorage direto (mesma convenção de tico-plans.js) em vez de
+    // depender de window.MissaoFirebase — esse módulo carrega de forma
+    // assíncrona e pode ainda não estar pronto neste ponto.
+    let currentUser = null;
+    try {
+      currentUser = JSON.parse(localStorage.getItem('missao_aprovacao_auth_user') || 'null');
+    } catch (_) {}
+    if (currentUser && !currentUser.isGuest) {
+      window.location.href = '/jogar';
+      return;
+    }
+
     const notice = card.querySelector('#preview-notice');
     const fieldset = card.querySelector('fieldset[disabled]');
     if (!notice || !fieldset) return;
