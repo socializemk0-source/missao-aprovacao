@@ -40,6 +40,38 @@
     {
       "source": "/privacidade/",
       "destination": "/index.html"
+    },
+    {
+      "source": "/redacao",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/redacao/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/missoes",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/missoes/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/ranking",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/ranking/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dados",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dados/",
+      "destination": "/index.html"
     }
   ]
 }

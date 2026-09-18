@@ -200,13 +200,51 @@ export default async function authHandler(req, res, deps = {}) {
 
     // ------------------------------------------------------------------------
     // CONSULTA DE PERFIL — sempre o do próprio chamador autenticado.
+    //
+    // Autorrecuperação: signUp() com confirmação de e-mail exigida devolve
+    // session:null, então registerUser() nunca chega a chamar sync-profile.
+    // Sem isso, o primeiro login de todo usuário que precisa confirmar
+    // o e-mail (o caminho normal) nunca teria uma linha em users/profiles.
+    // Criamos aqui, no primeiro get-profile autenticado que encontrar essa
+    // lacuna, com os dados do cadastro (via req.user, quando disponíveis) e
+    // valores de fallback nunca vazios.
     // ------------------------------------------------------------------------
     if (action === 'get-profile') {
       if (!(await runRequireAuth(req, res))) return;
-      const [userRecord, profileRecord] = await Promise.all([
+      let [userRecord, profileRecord] = await Promise.all([
         getUserByUid(req.user.uid),
         getProfileByUserId(req.user.uid),
       ]);
+
+      if (!userRecord) {
+        const fallbackName = req.user.name?.trim() || req.user.email?.split('@')[0] || 'Concurseiro(a)';
+        const fallbackCity = req.user.cidade?.trim() || 'Brasil';
+        const fallbackWhatsapp = req.user.whatsapp?.trim() || '';
+
+        userRecord = await getOrCreateUser({
+          uid: req.user.uid,
+          name: fallbackName,
+          email: req.user.email || '',
+          targetExam: 'Concursos Públicos',
+          preferredBanca: 'Cebraspe',
+          city: fallbackCity,
+          whatsapp: fallbackWhatsapp,
+          plan: 'free',
+          planPrice: 'R$ 29,90',
+          xp: 0,
+          streak: 1,
+          hearts: 5,
+        });
+        profileRecord = await upsertProfile(req.user.uid, {
+          fullName: fallbackName,
+          bio: 'Estudante focado em concursos públicos.',
+          city: fallbackCity,
+          phone: fallbackWhatsapp,
+          targetExam: 'Concursos Públicos',
+          preferredBanca: 'Cebraspe',
+        }).catch(() => profileRecord);
+      }
+
       if (userRecord) delete userRecord.passwordHash;
       const merged = {
         ...(userRecord || {}),

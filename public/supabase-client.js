@@ -110,6 +110,29 @@ function persistUser(user) {
   window.dispatchEvent(new CustomEvent('auth_state_changed', { detail: user }));
 }
 
+// Busca (e autorrecupera, se for a primeira vez) o perfil de um usuário que
+// já está autenticado no Supabase mas ainda não tem nada em cache local —
+// o caso de um login via OAuth por redirecionamento (ex.: Google): o
+// Supabase autentica a sessão sozinho ao carregar a página de volta, mas
+// sem isto a pessoa fica autenticada "por dentro" e o app nunca percebe.
+async function hydrateSessionUser(session) {
+  try {
+    const res = await authFetch('/api/auth?action=get-profile');
+    const payload = await res.json().catch(() => ({}));
+    const user = {
+      uid: session.user.id,
+      email: session.user.email,
+      name: session.user.user_metadata?.name || 'Concurseiro(a)',
+      plan: 'free',
+      ...(payload?.profile || {}),
+    };
+    persistUser(user);
+    return user;
+  } catch (_) {
+    return null;
+  }
+}
+
 // -----------------------------------------------------------------------
 // Cadastro / login — sempre via Supabase Auth (nunca senha no nosso backend)
 // -----------------------------------------------------------------------
@@ -127,6 +150,15 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
 
   if (error) {
     throw new Error(error.message || 'Não foi possível criar sua conta.');
+  }
+  // Por segurança contra enumeração de e-mails, o Supabase Auth NUNCA
+  // devolve um erro quando o e-mail já está cadastrado — ele responde com
+  // a mesma forma de um cadastro novo (session: null), só que com
+  // `identities: []`. Sem checar isso, todo re-cadastro com um e-mail já
+  // existente parecia ter dado certo ("confirme seu e-mail"), mas nada era
+  // criado de verdade — nem no Auth nem o perfil na nossa tabela.
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error('Este e-mail já está cadastrado. Faça login ou use "Esqueci minha senha".');
   }
   if (!data.session) {
     throw new Error('Cadastro criado! Confirme seu e-mail e depois faça login para continuar.');
@@ -218,7 +250,7 @@ export function subscribeAuth(callback) {
   const handleCustom = (e) => callback(e.detail);
   window.addEventListener('auth_state_changed', handleCustom);
 
-  const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+  const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_OUT' || !session?.user) {
       if (event === 'SIGNED_OUT') persistUser(null);
       return;
@@ -226,7 +258,15 @@ export function subscribeAuth(callback) {
     // Sessão renovada/restaurada: não sobrescreve o perfil já em cache,
     // só garante que subscribers recebam o usuário atual.
     const current = getCurrentUser();
-    if (current && current.uid === session.user.id) callback(current);
+    if (current && current.uid === session.user.id) {
+      callback(current);
+      return;
+    }
+    // Sessão nova sem nada em cache local ainda (ex.: outra aba acabou de
+    // logar, ou o carregamento inicial da página ainda não tinha rodado
+    // quando este listener foi registrado).
+    const user = await hydrateSessionUser(session);
+    if (user) callback(user);
   });
 
   return () => {
@@ -593,5 +633,26 @@ if (typeof window !== 'undefined') {
   window.FirebaseApplet = SupabaseApplet; // alias retrocompatível para tico-*.js
   window.MissaoFirebase = SupabaseApplet;
 }
+
+// -----------------------------------------------------------------------
+// Login por OAuth (Google) volta pra página inicial após o redirecionamento
+// do provedor — não passa por /cadastro nem /entrar, então nenhum código
+// desses formulários roda. Sem isto, quem loga com Google fica autenticado
+// no Supabase mas o app nunca chega a perceber (subscribeAuth só é
+// escutado por quem chama, e a landing page não chama). Roda uma vez, sem
+// depender de nenhum componente pedir isso.
+(async function hydrateFreshSessionOnLoad() {
+  try {
+    if (getCurrentUser()) return; // já tem cache local — nada a fazer aqui
+    const { data } = await supabase.auth.getSession();
+    if (!data?.session?.user) return;
+    const user = await hydrateSessionUser(data.session);
+    if (user && window.location.pathname === '/') {
+      window.location.href = '/jogar';
+    }
+  } catch (_) {
+    // Sem sessão válida ainda (ou servidor indisponível) — segue normal.
+  }
+})();
 
 export default SupabaseApplet;
