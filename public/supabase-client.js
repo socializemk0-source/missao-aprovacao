@@ -128,6 +128,15 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
   if (error) {
     throw new Error(error.message || 'Não foi possível criar sua conta.');
   }
+  // Por segurança contra enumeração de e-mails, o Supabase Auth NUNCA
+  // devolve um erro quando o e-mail já está cadastrado — ele responde com
+  // a mesma forma de um cadastro novo (session: null), só que com
+  // `identities: []`. Sem checar isso, todo re-cadastro com um e-mail já
+  // existente parecia ter dado certo ("confirme seu e-mail"), mas nada era
+  // criado de verdade — nem no Auth nem o perfil na nossa tabela.
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error('Este e-mail já está cadastrado. Faça login ou use "Esqueci minha senha".');
+  }
   if (!data.session) {
     throw new Error('Cadastro criado! Confirme seu e-mail e depois faça login para continuar.');
   }

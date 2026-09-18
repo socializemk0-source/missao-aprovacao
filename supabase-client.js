@@ -52,6 +52,25 @@ export async function getAccessToken() {
   }
 }
 
+// A Oficina de Redação (React, bundle pré-compilado sem pipeline de build
+// neste repositório) chama fetch('/api/redacao', ...) sem nenhum header —
+// ela nunca soube que a correção passou a exigir login (necessário para
+// aplicar o limite semanal do plano Grátis). Como não há como recompilar
+// o bundle, interceptamos só essa chamada específica e anexamos o
+// Authorization: Bearer <token> por fora, de forma transparente.
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async function (input, init = {}) {
+  const url = typeof input === 'string' ? input : input?.url || '';
+  const method = (init?.method || 'GET').toUpperCase();
+  if (url === '/api/redacao' && method === 'POST') {
+    const token = await getAccessToken();
+    if (token) {
+      init = { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } };
+    }
+  }
+  return nativeFetch(input, init);
+};
+
 // fetch com Authorization: Bearer <token> anexado automaticamente. Toda
 // rota privada de /api/auth e /api/data deve ser chamada por aqui — nunca
 // via fetch() cru, para nunca esquecer o token.
@@ -108,6 +127,15 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
 
   if (error) {
     throw new Error(error.message || 'Não foi possível criar sua conta.');
+  }
+  // Por segurança contra enumeração de e-mails, o Supabase Auth NUNCA
+  // devolve um erro quando o e-mail já está cadastrado — ele responde com
+  // a mesma forma de um cadastro novo (session: null), só que com
+  // `identities: []`. Sem checar isso, todo re-cadastro com um e-mail já
+  // existente parecia ter dado certo ("confirme seu e-mail"), mas nada era
+  // criado de verdade — nem no Auth nem o perfil na nossa tabela.
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error('Este e-mail já está cadastrado. Faça login ou use "Esqueci minha senha".');
   }
   if (!data.session) {
     throw new Error('Cadastro criado! Confirme seu e-mail e depois faça login para continuar.');
