@@ -100,14 +100,15 @@ export const viewedTips = pgTable('viewed_tips', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// Assinatura recorrente do Plano PRO (Mercado Pago Preapproval). Uma
+// Assinatura recorrente do Plano PRO (AbacatePay Subscriptions). Uma
 // linha por usuário com o estado atual — atualizada a cada webhook
-// "subscription_preapproval" do Mercado Pago (authorized/paused/cancelled).
+// subscription.* da AbacatePay (completed/renewed/payment_failed/cancelled).
 export const subscriptions = pgTable('subscriptions', {
   id: serial('id').primaryKey(),
   userId: text('user_id').notNull().unique(), // uid do Supabase Auth — nunca vindo do cliente
-  mpPreapprovalId: text('mp_preapproval_id').unique(),
-  status: text('status').notNull().default('none'), // none | pending | authorized | paused | cancelled
+  providerCustomerId: text('provider_customer_id'), // customer da AbacatePay — criado uma vez, reaproveitado
+  providerSubscriptionId: text('provider_subscription_id').unique(),
+  status: text('status').notNull().default('none'), // none | pending | active | payment_failed | cancelled
   plan: text('plan').default('pro'),
   amount: numeric('amount', { precision: 10, scale: 2 }).default('29.90'),
   currency: text('currency').default('BRL'),
@@ -117,15 +118,15 @@ export const subscriptions = pgTable('subscriptions', {
 });
 
 // Histórico de cobranças recorrentes já processadas — registro de
-// auditoria e chave de idempotência (mpPaymentId é único: o webhook do
-// Mercado Pago pode reenviar a mesma notificação várias vezes, e nunca
+// auditoria e chave de idempotência (providerPaymentId é único: o webhook
+// da AbacatePay pode reenviar a mesma notificação várias vezes, e nunca
 // deve aplicar a mesma cobrança duas vezes).
 export const subscriptionPayments = pgTable('subscription_payments', {
   id: serial('id').primaryKey(),
-  mpPaymentId: text('mp_payment_id').notNull().unique(), // ID do authorized_payment no Mercado Pago
-  mpPreapprovalId: text('mp_preapproval_id').notNull(),
+  providerPaymentId: text('provider_payment_id').notNull().unique(), // ID do pagamento na AbacatePay
+  providerSubscriptionId: text('provider_subscription_id').notNull(),
   userId: text('user_id').notNull(),
-  status: text('status').notNull(), // approved | pending | rejected | ...
+  status: text('status').notNull(), // paid | pending | failed | ...
   amount: numeric('amount', { precision: 10, scale: 2 }),
   currency: text('currency').default('BRL'),
   createdAt: timestamp('created_at').defaultNow(),

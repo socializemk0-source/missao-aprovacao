@@ -280,7 +280,7 @@ export function subscribeAuth(callback) {
 // localStorage é só otimização de UX e nunca decide autorização real.
 // -----------------------------------------------------------------------
 
-// Só existe um jeito de virar PRO: pagar via Mercado Pago. Cria a
+// Só existe um jeito de virar PRO: pagar via AbacatePay. Cria a
 // preferência de checkout autenticada (o servidor usa req.user.uid — o
 // que a gente manda aqui não importa) e redireciona para lá. O plano só
 // muda de verdade quando o webhook confirmar o pagamento no servidor.
@@ -308,7 +308,7 @@ export async function refreshPlanFromServer() {
 
 export async function upgradeUserPlan(newPlan = 'pro') {
   if (newPlan === 'pro') {
-    return startProCheckout(); // navega para o Mercado Pago — não retorna
+    return startProCheckout(); // navega para a AbacatePay — não retorna
   }
 
   const res = await authFetch('/api/auth', {
