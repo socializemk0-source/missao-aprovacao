@@ -1,154 +1,190 @@
-import { createMercadoPagoClient, verifyWebhookSignature } from '../../src/payments/mercadopago.js';
+import { verifyWebhookSignature, verifyWebhookSecret } from '../../src/payments/abacatepay.js';
 import {
   updateUser,
   syncLeaderboardEntry,
-  getSubscriptionByPreapprovalId,
+  getSubscriptionByProviderSubscriptionId,
+  getSubscriptionByProviderCustomerId,
+  getSubscriptionByUserId,
   upsertSubscription,
-  getSubscriptionPaymentByMpId,
+  getSubscriptionPaymentByProviderPaymentId,
   recordSubscriptionPayment,
 } from '../../src/db/queries.js';
 
 const PRO_PLAN_PRICE_LABEL = 'R$ 29,90';
+
+// Lê o corpo BRUTO da requisição — a assinatura HMAC da AbacatePay é sobre
+// os bytes exatos recebidos, não sobre um JSON re-serializado (que pode
+// ter espaços/ordem de chaves diferentes e invalidar a assinatura). No
+// Express (server.js), server.js grava isso em req.rawBody via a opção
+// `verify` do express.json(); na Vercel (sem parsing automático), lemos o
+// stream da requisição diretamente.
+async function getRawBody(req) {
+  if (req.rawBody) return req.rawBody.toString('utf8');
+  let raw = '';
+  for await (const chunk of req) raw += chunk;
+  return raw;
+}
+
+// O evento não repete de forma confiável o uid do nosso usuário — tenta,
+// em ordem, todo campo plausível que a AbacatePay pode usar para
+// identificar a assinatura/customer, sempre contra dados que NÓS mesmos
+// gravamos ao criar o checkout (nunca confiando em algo vindo só do corpo).
+async function resolveSubscriptionRow(data) {
+  const subscriptionId = data?.subscription?.id;
+  if (subscriptionId) {
+    const bySubId = await getSubscriptionByProviderSubscriptionId(subscriptionId);
+    if (bySubId) return bySubId;
+  }
+
+  const customerId = data?.customer?.id || data?.subscription?.customerId || data?.customerId;
+  if (customerId) {
+    const byCustomerId = await getSubscriptionByProviderCustomerId(customerId);
+    if (byCustomerId) return byCustomerId;
+  }
+
+  const externalId = data?.subscription?.externalId || data?.checkout?.externalId || data?.externalId;
+  if (externalId) {
+    const byUserId = await getSubscriptionByUserId(externalId);
+    if (byUserId) return byUserId;
+  }
+
+  return null;
+}
+
+async function setPlan(userId, plan) {
+  const updated = await updateUser(userId, plan === 'pro' ? { plan: 'pro', planPrice: PRO_PLAN_PRICE_LABEL } : { plan: 'free' });
+  if (updated) {
+    await syncLeaderboardEntry({
+      userId,
+      name: updated.name,
+      targetExam: updated.targetExam || 'Polícia Federal',
+      city: updated.city || 'Brasil',
+      questionsAnswered: 0,
+      streak: updated.streak || 1,
+      xp: updated.xp || 0,
+      plan,
+    }).catch(() => {});
+  }
+}
 
 /**
  * POST /api/payments/webhook — arquivo próprio (em vez de um sub-caminho
  * despachado por req.path) para que a rota exista de verdade tanto atrás
  * do Express (server.js) quanto no roteamento por arquivo da Vercel.
  *
- * Assinatura recorrente do Plano PRO: dois tópicos de webhook importam:
- *  - subscription_preapproval: a assinatura mudou de estado (authorized,
- *    paused, cancelled) — é aqui que o PRO é liberado ou revertido.
- *  - subscription_authorized_payment: uma cobrança recorrente específica
- *    (mensal) foi processada — só entra no histórico/idempotência.
+ * Webhook da AbacatePay: dois fatores de autenticidade, ambos obrigatórios
+ * (fail-closed se qualquer um estiver ausente ou não configurado):
+ *  - ?webhookSecret= na query string, igual ao cadastrado no painel deles;
+ *  - X-Webhook-Signature: HMAC-SHA256 do corpo bruto com a chave pública
+ *    da AbacatePay.
  *
- * Webhook do Mercado Pago: público por natureza (o MP não tem sessão
- * nossa) — a autenticidade vem exclusivamente da validação de assinatura
- * + da consulta do recurso na API do MP com o Access Token do servidor.
- *
- * `deps.mpClient` existe só para os testes injetarem um cliente falso.
+ * Eventos de assinatura tratados: subscription.completed/renewed (libera o
+ * PRO), subscription.payment_failed (só registra, não revoga — a própria
+ * AbacatePay cancela automaticamente após esgotar as tentativas) e
+ * subscription.cancelled (revoga o PRO).
  */
 export default async function webhookHandler(req, res, deps = {}) {
-  const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
-  const xSignature = req.headers['x-signature'];
-  const xRequestId = req.headers['x-request-id'];
-  const dataId = req.query?.['data.id'] || req.body?.data?.id;
-  const type = req.body?.type || req.query?.type;
+  const webhookSecret = process.env.ABACATEPAY_WEBHOOK_SECRET;
+  const publicKey = process.env.ABACATEPAY_WEBHOOK_PUBLIC_KEY;
 
-  if (!secret) {
-    console.error('[Payments Webhook] MERCADOPAGO_WEBHOOK_SECRET não configurado — recusando notificação (fail-closed).');
+  if (!webhookSecret || !publicKey) {
+    console.error('[Payments Webhook] ABACATEPAY_WEBHOOK_SECRET/ABACATEPAY_WEBHOOK_PUBLIC_KEY não configurados — recusando notificação (fail-closed).');
     return res.status(401).json({ error: 'Webhook não configurado.' });
   }
 
-  if (!verifyWebhookSignature({ xSignature, xRequestId, dataId, secret })) {
-    console.warn('[Payments Webhook] Assinatura inválida ou ausente — notificação rejeitada.');
+  if (!verifyWebhookSecret({ receivedSecret: req.query?.webhookSecret, expectedSecret: webhookSecret })) {
+    console.warn('[Payments Webhook] Segredo da query string inválido ou ausente — notificação rejeitada.');
+    return res.status(401).json({ error: 'Segredo inválido.' });
+  }
+
+  const rawBody = deps.rawBody || await getRawBody(req);
+  const signatureHeader = req.headers['x-webhook-signature'];
+  if (!verifyWebhookSignature({ rawBody, signatureHeader, publicKey })) {
+    console.warn('[Payments Webhook] Assinatura HMAC inválida ou ausente — notificação rejeitada.');
     return res.status(401).json({ error: 'Assinatura inválida.' });
   }
 
-  if ((type !== 'subscription_preapproval' && type !== 'subscription_authorized_payment') || !dataId) {
-    // Outros tópicos (merchant_order, etc.) — confirma recebimento sem agir.
-    return res.status(200).json({ success: true, ignored: true });
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ error: 'Corpo da notificação não é um JSON válido.' });
   }
 
-  let mpClient;
-  try {
-    mpClient = deps.mpClient || createMercadoPagoClient();
-  } catch (err) {
-    console.error('[Payments Webhook] Cliente do Mercado Pago não configurado:', err.message);
-    return res.status(500).json({ error: 'Configuração de pagamentos ausente.' });
-  }
+  const { event, data } = payload || {};
 
   try {
-    if (type === 'subscription_preapproval') {
-      // Nunca confiar no corpo da notificação: buscamos a assinatura de
-      // verdade na API do Mercado Pago com o Access Token do servidor.
-      const subscription = await mpClient.getSubscription(dataId);
-      const userId = subscription.external_reference;
-
-      if (!userId) {
-        console.warn('[Payments Webhook] Assinatura sem external_reference válido:', subscription.id);
+    if (event === 'subscription.completed' || event === 'subscription.renewed') {
+      const row = await resolveSubscriptionRow(data);
+      if (!row) {
+        console.warn(`[Payments Webhook] ${event} sem assinatura local correspondente — verifique o payload:`, JSON.stringify(data));
         return res.status(200).json({ success: true, ignored: true });
       }
 
+      const subscriptionId = data?.subscription?.id || row.providerSubscriptionId;
       await upsertSubscription({
-        userId,
-        mpPreapprovalId: subscription.id,
-        status: subscription.status,
-        amount: subscription.auto_recurring?.transaction_amount,
-        currency: subscription.auto_recurring?.currency_id,
+        userId: row.userId,
+        providerCustomerId: row.providerCustomerId,
+        providerSubscriptionId: subscriptionId,
+        status: 'active',
+        amount: data?.subscription?.amount !== undefined ? data.subscription.amount / 100 : undefined,
+        currency: data?.subscription?.currency,
       });
+      await setPlan(row.userId, 'pro');
 
-      if (subscription.status === 'authorized') {
-        const updated = await updateUser(userId, { plan: 'pro', planPrice: PRO_PLAN_PRICE_LABEL });
-        if (updated) {
-          await syncLeaderboardEntry({
-            userId,
-            name: updated.name,
-            targetExam: updated.targetExam || 'Polícia Federal',
-            city: updated.city || 'Brasil',
-            questionsAnswered: 0,
-            streak: updated.streak || 1,
-            xp: updated.xp || 0,
-            plan: 'pro',
-          }).catch(() => {});
+      const paymentId = data?.payment?.id;
+      if (paymentId) {
+        const already = await getSubscriptionPaymentByProviderPaymentId(String(paymentId));
+        if (!already) {
+          await recordSubscriptionPayment({
+            providerPaymentId: String(paymentId),
+            providerSubscriptionId: subscriptionId,
+            userId: row.userId,
+            status: data?.payment?.status,
+            amount: data?.payment?.paidAmount !== undefined ? data.payment.paidAmount / 100 : undefined,
+            currency: data?.subscription?.currency,
+          });
         }
-        console.log(`[Payments] Assinatura ${subscription.id} autorizada — usuário ${userId} promovido a PRO.`);
-      } else if (subscription.status === 'cancelled' || subscription.status === 'paused') {
-        // Cobre tanto o cancelamento feito pelo próprio app quanto um
-        // cancelamento feito pelo usuário direto na conta do Mercado Pago.
-        const updated = await updateUser(userId, { plan: 'free' });
-        if (updated) {
-          await syncLeaderboardEntry({
-            userId,
-            name: updated.name,
-            targetExam: updated.targetExam || 'Polícia Federal',
-            city: updated.city || 'Brasil',
-            questionsAnswered: 0,
-            streak: updated.streak || 1,
-            xp: updated.xp || 0,
-            plan: 'free',
-          }).catch(() => {});
-        }
-        console.log(`[Payments] Assinatura ${subscription.id} (${subscription.status}) — usuário ${userId} revertido para o modo gratuito.`);
       }
 
+      console.log(`[Payments] ${event} — assinatura ${subscriptionId}, usuário ${row.userId} promovido a PRO.`);
       return res.status(200).json({ success: true });
     }
 
-    // subscription_authorized_payment — uma cobrança recorrente específica.
-    const authorizedPayment = await mpClient.getAuthorizedPayment(dataId);
-    const preapprovalId = authorizedPayment.preapproval_id;
+    if (event === 'subscription.payment_failed') {
+      const row = await resolveSubscriptionRow(data);
+      if (!row) return res.status(200).json({ success: true, ignored: true });
 
-    if (!preapprovalId) {
-      console.warn('[Payments Webhook] Cobrança recorrente sem preapproval_id válido:', authorizedPayment.id);
-      return res.status(200).json({ success: true, ignored: true });
+      await upsertSubscription({
+        userId: row.userId,
+        providerCustomerId: row.providerCustomerId,
+        providerSubscriptionId: row.providerSubscriptionId,
+        status: 'payment_failed',
+      });
+      console.warn(`[Payments] Cobrança falhou para o usuário ${row.userId} (tentativa ${data?.retryNumber ?? '?'}).`);
+      return res.status(200).json({ success: true });
     }
 
-    const subscription = await getSubscriptionByPreapprovalId(preapprovalId);
-    const userId = subscription?.userId;
-    if (!userId) {
-      console.warn('[Payments Webhook] Cobrança recorrente sem assinatura local correspondente:', authorizedPayment.id);
-      return res.status(200).json({ success: true, ignored: true });
+    if (event === 'subscription.cancelled') {
+      const row = await resolveSubscriptionRow(data);
+      if (!row) return res.status(200).json({ success: true, ignored: true });
+
+      await upsertSubscription({
+        userId: row.userId,
+        providerCustomerId: row.providerCustomerId,
+        providerSubscriptionId: row.providerSubscriptionId,
+        status: 'cancelled',
+      });
+      await setPlan(row.userId, 'free');
+      console.log(`[Payments] Assinatura cancelada (${data?.subscription?.cancelledDueTo || 'manual'}) — usuário ${row.userId} revertido para o modo gratuito.`);
+      return res.status(200).json({ success: true });
     }
 
-    const already = await getSubscriptionPaymentByMpId(String(authorizedPayment.id));
-    if (already) {
-      // O Mercado Pago reenvia notificações; cobrança já processada antes.
-      return res.status(200).json({ success: true, alreadyProcessed: true });
-    }
-
-    await recordSubscriptionPayment({
-      mpPaymentId: String(authorizedPayment.id),
-      mpPreapprovalId: preapprovalId,
-      userId,
-      status: authorizedPayment.status,
-      amount: authorizedPayment.transaction_amount,
-      currency: authorizedPayment.currency_id,
-    });
-
-    return res.status(200).json({ success: true });
+    // Outros tópicos (trial_started, etc.) — confirma recebimento sem agir.
+    return res.status(200).json({ success: true, ignored: true });
   } catch (err) {
     console.error('[Payments Webhook] Erro ao processar notificação:', err.message);
-    // 5xx faz o Mercado Pago reenviar depois — correto para falhas transitórias.
+    // 5xx faz a AbacatePay reenviar depois — correto para falhas transitórias.
     return res.status(500).json({ error: 'Erro ao processar notificação.' });
   }
 }

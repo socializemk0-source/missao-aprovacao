@@ -25,8 +25,8 @@ export function createStore() {
       user_A: [],
       user_B: [],
     },
-    subscriptions: {}, // userId -> { userId, mpPreapprovalId, status, ... }
-    subscriptionPayments: [], // { mpPaymentId, mpPreapprovalId, userId, status, ... }
+    subscriptions: {}, // userId -> { userId, providerCustomerId, providerSubscriptionId, status, ... }
+    subscriptionPayments: [], // { providerPaymentId, providerSubscriptionId, userId, status, ... }
   };
 }
 
@@ -87,17 +87,19 @@ export function buildNamedExports(store) {
 
     // usados por api/payments.js, api/payments/webhook.js e api/auth.js (downgrade)
     getSubscriptionByUserId: async (userId) => store.subscriptions[userId] || null,
-    getSubscriptionByPreapprovalId: async (mpPreapprovalId) =>
-      Object.values(store.subscriptions).find((s) => s.mpPreapprovalId === mpPreapprovalId) || null,
+    getSubscriptionByProviderSubscriptionId: async (providerSubscriptionId) =>
+      Object.values(store.subscriptions).find((s) => s.providerSubscriptionId === providerSubscriptionId) || null,
+    getSubscriptionByProviderCustomerId: async (providerCustomerId) =>
+      Object.values(store.subscriptions).find((s) => s.providerCustomerId === providerCustomerId) || null,
     upsertSubscription: async (data) => {
       const existing = store.subscriptions[data.userId] || {};
       store.subscriptions[data.userId] = { ...existing, ...data };
       return store.subscriptions[data.userId];
     },
-    getSubscriptionPaymentByMpId: async (mpPaymentId) =>
-      store.subscriptionPayments.find((p) => p.mpPaymentId === mpPaymentId) || null,
+    getSubscriptionPaymentByProviderPaymentId: async (providerPaymentId) =>
+      store.subscriptionPayments.find((p) => p.providerPaymentId === providerPaymentId) || null,
     recordSubscriptionPayment: async (data) => {
-      if (store.subscriptionPayments.some((p) => p.mpPaymentId === data.mpPaymentId)) {
+      if (store.subscriptionPayments.some((p) => p.providerPaymentId === data.providerPaymentId)) {
         return null; // onConflictDoNothing real correspondente
       }
       const record = { ...data };

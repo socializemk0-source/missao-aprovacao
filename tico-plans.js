@@ -93,7 +93,7 @@
       return this.getPlan() === 'pro';
     },
 
-    // Virar PRO: redireciona para o checkout real do Mercado Pago (a
+    // Virar PRO: redireciona para o checkout real da AbacatePay (a
     // página navega para fora — nada aqui "ativa" nada de fato; só o
     // webhook confirmado no servidor faz isso, ver api/payments.js).
     // Voltar para grátis: autosserviço direto, sem risco de segurança.
@@ -102,7 +102,7 @@
         if (!window.MissaoFirebase || typeof window.MissaoFirebase.startProCheckout !== 'function') {
           throw new Error('Pagamento indisponível no momento. Tente novamente em instantes.');
         }
-        await window.MissaoFirebase.startProCheckout(); // navega para o Mercado Pago
+        await window.MissaoFirebase.startProCheckout(); // navega para a AbacatePay
         return true;
       }
 
@@ -115,7 +115,7 @@
       return true;
     },
 
-    // Ao voltar do checkout do Mercado Pago (?payment=success|pending|failure),
+    // Ao voltar do checkout da AbacatePay (?payment=success|pending|failure),
     // NUNCA confia nesse parâmetro (é controlável pelo usuário) — busca o
     // plano real no servidor e só então reflete na interface.
     async checkPaymentReturn() {
@@ -176,7 +176,7 @@
       if (status === 'pending') {
         this.openModal('details', 'Seu pagamento está em análise. Assim que for aprovado o PRO libera automaticamente — pode continuar estudando enquanto isso.');
       } else {
-        this.openModal('details', 'Estamos confirmando seu pagamento com o Mercado Pago. Se a confirmação demorar mais que alguns minutos, atualize a página.');
+        this.openModal('details', 'Estamos confirmando seu pagamento. Se a confirmação demorar mais que alguns minutos, atualize a página.');
       }
     },
 
@@ -423,12 +423,12 @@
           ${isPro
             ? `<p class="tico-plan-success-notice">✅ Sua assinatura PRO de R$ 29,90/mês está ativa nesta conta.</p>`
             : `<p class="tico-plan-security-note">
-                🔒 Pagamento seguro via Mercado Pago (PIX, cartão ou boleto) · Garantia de 7 dias ou seu dinheiro de volta
+                🔒 Pagamento seguro via AbacatePay (PIX ou cartão) · Garantia de 7 dias ou seu dinheiro de volta
               </p>`}
         </div>
       `;
 
-      // Botão Ativar PRO — redireciona para o checkout real do Mercado Pago.
+      // Botão Ativar PRO — redireciona para o checkout real da AbacatePay.
       const confirmBtn = inner.querySelector('#tico-confirm-pro-btn');
       const checkoutError = inner.querySelector('#tico-plan-checkout-error');
       if (confirmBtn) {
@@ -438,7 +438,7 @@
           const originalContent = confirmBtn.innerHTML;
           confirmBtn.innerHTML = '<span>Abrindo pagamento seguro...</span>';
           try {
-            await TicoPlan.setPlan('pro'); // navega para o Mercado Pago (não retorna se der certo)
+            await TicoPlan.setPlan('pro'); // navega para a AbacatePay (não retorna se der certo)
           } catch (err) {
             confirmBtn.disabled = false;
             confirmBtn.innerHTML = originalContent;
@@ -450,7 +450,7 @@
         });
       }
 
-      // Botão Cancelar Assinatura — cancela de verdade no Mercado Pago
+      // Botão Cancelar Assinatura — cancela de verdade na AbacatePay
       // antes de voltar para o modo grátis (ver api/auth.js downgrade-to-free).
       const toggleFreeBtn = inner.querySelector('#tico-toggle-free-btn');
       if (toggleFreeBtn) {
