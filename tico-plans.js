@@ -1,6 +1,6 @@
 /**
  * tico-plans.js - Sistema de Planos (Modo Grátis vs Modo PRO R$ 29,90)
- * Missão Aprovação: Plataforma Gamificada para Concursos Públicos
+ * Aprova Tico: Plataforma Gamificada para Concursos Públicos
  */
 
 (function() {
