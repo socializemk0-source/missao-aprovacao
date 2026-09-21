@@ -51,6 +51,8 @@ function createUnconfiguredSupabaseStub() {
       async signInWithPassword() { return { data: { user: null, session: null }, error: configError }; },
       async signInWithOAuth() { return { data: null, error: configError }; },
       async signOut() { return { error: null }; },
+      async resetPasswordForEmail() { return { data: null, error: configError }; },
+      async updateUser() { return { data: { user: null }, error: configError }; },
     },
   };
 }
@@ -207,7 +209,12 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
     throw new Error('Este e-mail já está cadastrado. Faça login ou use "Esqueci minha senha".');
   }
   if (!data.session) {
-    throw new Error('Cadastro criado! Confirme seu e-mail e depois faça login para continuar.');
+    // Isto NÃO é uma falha — é o cadastro funcionando como esperado quando
+    // o projeto Supabase exige confirmação por e-mail. Antes isto era
+    // sinalizado lançando um Error, e o chamador (tico-account-form.js)
+    // mostrava QUALQUER exceção num alerta vermelho de erro — cadastro
+    // criado com sucesso aparecia com a mesma cor de uma falha real.
+    return { pendingConfirmation: true, email };
   }
 
   const res = await authFetch('/api/auth', {
@@ -222,6 +229,40 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
   const user = { ...payload.user, uid: data.user.id, email: data.user.email };
   persistUser(user);
   return user;
+}
+
+// Recuperação de senha — fluxo complementar ao cadastro/login: envia o
+// e-mail com o link de redefinição (o Supabase volta pra /entrar com um
+// token de recuperação no fragmento da URL; tico-account-form.js detecta
+// isso e chama updatePassword). Nunca revela se o e-mail existe ou não na
+// mensagem de sucesso (mesma política anti-enumeração do signUp).
+export async function sendPasswordReset(email) {
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    throw new Error('Informe um e-mail válido para receber o link de recuperação.');
+  }
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${window.location.origin}/entrar`,
+  });
+  if (error) {
+    throw new Error(error.message || 'Não foi possível enviar o e-mail de recuperação agora.');
+  }
+  return true;
+}
+
+// Define a nova senha DEPOIS que a pessoa já voltou pelo link do e-mail —
+// nesse momento o Supabase já estabeleceu uma sessão de recuperação
+// temporária a partir do token na URL (detectSessionInUrl: true), então
+// updateUser({password}) tem autoridade pra trocar a senha sem pedir a
+// senha antiga de novo.
+export async function updatePassword(newPassword) {
+  if (!newPassword || newPassword.length < 6) {
+    throw new Error('A nova senha deve ter pelo menos 6 caracteres.');
+  }
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) {
+    throw new Error(error.message || 'Não foi possível atualizar sua senha agora.');
+  }
+  return true;
 }
 
 export async function loginWithEmail(email, password) {
@@ -645,6 +686,8 @@ const SupabaseApplet = {
   authFetch,
   registerUser,
   loginWithEmail,
+  sendPasswordReset,
+  updatePassword,
   getCurrentUser,
   upgradeUserPlan,
   startProCheckout,

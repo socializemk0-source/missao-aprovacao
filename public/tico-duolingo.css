@@ -5611,6 +5611,28 @@ aside.sidebar::-webkit-scrollbar-thumb:hover {
   background: #e2e8f0;
 }
 
+.account-forgot-link {
+  display: block;
+  margin: 10px auto 0;
+  background: none;
+  border: none;
+  color: #1a4d6f;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 4px;
+}
+
+.account-forgot-link:hover:not(:disabled) {
+  opacity: 0.75;
+}
+
+.account-forgot-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .account-alert-error {
   background: #fef2f2;
   border: 1px solid #fecaca;
