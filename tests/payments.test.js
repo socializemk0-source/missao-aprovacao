@@ -132,6 +132,49 @@ test('checkout reaproveita o customer já criado — nunca cria um customer dupl
   assert.equal(client.calls.createSubscription[0].customerId, 'cust_ja_existente');
 });
 
+// P1 da revisão de 20/09/2026: "Novo checkout pode impedir o cancelamento
+// da assinatura original". upsertSubscription guarda UMA linha por
+// usuário — criar um segundo checkout sobrescrevia providerSubscriptionId,
+// perdendo pra sempre a referência da assinatura ativa original (que
+// continuava sendo cobrada, sem ninguém saber cancelar).
+test('checkout NÃO cria uma segunda assinatura quando já existe uma ativa — evita perder a referência da original', async () => {
+  store.subscriptions.user_A = {
+    userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_ORIGINAL_ATIVA', status: 'active',
+  };
+  const client = fakeAbacatePayClient({ subscriptionId: 'bill_NOVA_DUPLICADA' });
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 409);
+  assert.equal(client.calls.createSubscription.length, 0, 'não pode criar uma segunda assinatura na AbacatePay');
+  assert.equal(store.subscriptions.user_A.providerSubscriptionId, 'subs_ORIGINAL_ATIVA', 'a referência da assinatura ativa não pode ser perdida/sobrescrita');
+  assert.equal(store.subscriptions.user_A.status, 'active');
+});
+
+test('checkout com assinatura pending (tentativa anterior não confirmada) ainda pode criar um novo checkout', async () => {
+  store.subscriptions.user_A = {
+    userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pending_antigo', status: 'pending',
+  };
+  const client = fakeAbacatePayClient({ subscriptionId: 'bill_novo' });
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(client.calls.createSubscription.length, 1);
+});
+
+test('checkout via GET é rejeitado (405) — o handler de pagamento nunca pode criar assinatura fora de POST', async () => {
+  const client = fakeAbacatePayClient();
+  const req = makeReq({ method: 'GET', headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 405);
+  assert.equal(client.calls.createSubscription.length, 0);
+});
+
 // ---------------------------------------------------------------------
 // Webhook (api/payments/webhook.js) — segredo na query + assinatura HMAC
 // obrigatórios, sem auth de sessão

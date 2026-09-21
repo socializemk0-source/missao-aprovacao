@@ -33,6 +33,15 @@ function resolveAppBaseUrl(req) {
  * falso — em produção sempre usa o client real (API key do ambiente).
  */
 export default async function paymentsHandler(req, res, deps = {}) {
+  // POST-only de propósito: este handler tem efeito colateral real (cria
+  // uma assinatura recorrente cobrável na AbacatePay). Sob Vercel, cada
+  // arquivo em api/ responde a QUALQUER método HTTP por padrão — sem essa
+  // checagem, um GET (bot, prefetch, scanner) chegando direto nesta rota
+  // criaria uma assinatura de verdade.
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Método não permitido.' });
+  }
+
   if (!(await runRequireAuth(req, res))) return;
 
   const productId = process.env.ABACATEPAY_PRODUCT_ID;
@@ -54,6 +63,20 @@ export default async function paymentsHandler(req, res, deps = {}) {
     // por e-mail), então sem reaproveitar o id já criado, toda tentativa
     // de checkout criaria um customer novo do lado deles.
     const existing = await getSubscriptionByUserId(req.user.uid);
+
+    // upsertSubscription guarda UMA linha por usuário: criar uma segunda
+    // assinatura aqui SUBSTITUIRIA o providerSubscriptionId da assinatura
+    // ativa original por esta nova, perdendo pra sempre a referência
+    // necessária pra cancelá-la — ela continuaria sendo cobrada sem
+    // ninguém conseguir mais encontrá-la. Uma assinatura 'pending' (nunca
+    // confirmada) não tem esse risco, então segue permitindo checkout novo.
+    if (existing?.status === 'active') {
+      return res.status(409).json({
+        success: false,
+        error: 'Você já tem uma assinatura PRO ativa.',
+      });
+    }
+
     let customerId = existing?.providerCustomerId;
     if (!customerId) {
       const customer = await client.createCustomer({ email: req.user.email });
