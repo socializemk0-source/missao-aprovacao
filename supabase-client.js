@@ -27,17 +27,43 @@ if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
   }
 }
 
-if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
+const isConfigured = Boolean(SUPABASE_CONFIG.url && SUPABASE_CONFIG.anonKey);
+if (!isConfigured) {
   console.error('[Supabase Client] SUPABASE_URL/SUPABASE_ANON_KEY ausentes — login e sincronização com a nuvem ficarão indisponíveis.');
 }
 
-export const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+// createClient('', '') lança "supabaseUrl is required" — e como este é um
+// module script sem try/catch em volta, isso derrubava a AVALIAÇÃO INTEIRA
+// deste módulo (nenhum export existiria, window.MissaoFirebase nunca
+// seria definido) sempre que a configuração do servidor faltasse. Sem
+// configuração, usamos um stub com a mesma forma de auth.* que todo o
+// resto deste arquivo já espera — cada chamador já trata `error` de
+// signUp/signInWithPassword/etc. como uma falha explícita (ver
+// registerUser/loginWithEmail), então isto vira uma mensagem clara de
+// "serviço indisponível" em vez de quebrar a página inteira.
+function createUnconfiguredSupabaseStub() {
+  const configError = { message: 'Serviço de contas indisponível no momento. Tente novamente mais tarde.' };
+  return {
+    auth: {
+      async getSession() { return { data: { session: null }, error: null }; },
+      onAuthStateChange() { return { data: { subscription: { unsubscribe() {} } } }; },
+      async signUp() { return { data: { user: null, session: null }, error: configError }; },
+      async signInWithPassword() { return { data: { user: null, session: null }, error: configError }; },
+      async signInWithOAuth() { return { data: null, error: configError }; },
+      async signOut() { return { error: null }; },
+    },
+  };
+}
+
+export const supabase = isConfigured
+  ? createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  : createUnconfiguredSupabaseStub();
 
 // -----------------------------------------------------------------------
 // Sessão e token de acesso
@@ -115,9 +141,28 @@ function persistUser(user) {
 // o caso de um login via OAuth por redirecionamento (ex.: Google): o
 // Supabase autentica a sessão sozinho ao carregar a página de volta, mas
 // sem isto a pessoa fica autenticada "por dentro" e o app nunca percebe.
+//
+// De propósito NÃO usa authFetch/getAccessToken aqui: essas funções chamam
+// supabase.auth.getSession(), e esta função roda de dentro do callback do
+// onAuthStateChange (subscribeAuth, mais abaixo) — chamar qualquer método
+// de supabase.auth de DENTRO desse callback é o deadlock documentado pelo
+// próprio Supabase (https://supabase.com/docs/guides/troubleshooting/why-is-my-supabase-api-call-not-returning-PGzXw0).
+// O `session` recebido como parâmetro já tem o access_token pronto, então
+// montamos a chamada autenticada na mão.
 async function hydrateSessionUser(session) {
+  const token = session?.access_token;
+  if (!token) return null;
   try {
-    const res = await authFetch('/api/auth?action=get-profile');
+    const res = await fetch('/api/auth?action=get-profile', {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      // Erro explícito: uma falha real do servidor NUNCA deve virar
+      // silenciosamente um perfil padrão gratuito persistido como se
+      // tivesse dado certo.
+      console.error('[Auth] Falha ao buscar perfil após autenticação:', res.status);
+      return null;
+    }
     const payload = await res.json().catch(() => ({}));
     const user = {
       uid: session.user.id,
@@ -128,7 +173,8 @@ async function hydrateSessionUser(session) {
     };
     persistUser(user);
     return user;
-  } catch (_) {
+  } catch (err) {
+    console.error('[Auth] Erro de rede ao buscar perfil após autenticação:', err.message);
     return null;
   }
 }
@@ -189,6 +235,11 @@ export async function loginWithEmail(email, password) {
   }
 
   const res = await authFetch('/api/auth?action=get-profile');
+  if (!res.ok) {
+    // Login no Supabase funcionou, mas buscar o perfil falhou de verdade —
+    // não finge sucesso com um perfil padrão gratuito inventado na hora.
+    throw new Error('Login feito, mas não foi possível carregar seu perfil agora. Tente novamente em instantes.');
+  }
   const payload = await res.json().catch(() => ({}));
 
   const user = {

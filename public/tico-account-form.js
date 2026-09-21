@@ -30,8 +30,24 @@
     return { wrapper, input };
   }
 
+  // Confirma no próprio Supabase que a sessão em cache ainda vale antes de
+  // usá-la pra decidir qualquer coisa. Cache local sobrevive a um token
+  // expirado/revogado — sem checar de verdade, alguém nessa situação era
+  // mandado direto pra /jogar e só descobria que não estava mais logado
+  // quando a primeira chamada autenticada lá dentro desse 401. Chamada
+  // direta em window.supabase (nunca de dentro de um onAuthStateChange:
+  // supabase-client.js já evita isso na hidratação — ver hydrateSessionUser).
+  function cachedSessionStillValid() {
+    if (!window.supabase || typeof window.supabase.auth?.getSession !== 'function') {
+      return Promise.resolve(false);
+    }
+    return window.supabase.auth.getSession()
+      .then(({ data }) => Boolean(data?.session?.user))
+      .catch(() => false);
+  }
+
   function enhance(card) {
-    if (card.dataset.ticoAccountReady === 'true') return;
+    if (card.dataset.ticoAccountReady === 'true' || card.dataset.ticoAccountChecking === 'true') return;
 
     // Quem já está logado (ex.: acabou de voltar do login por Google, ou
     // simplesmente ainda tem a sessão de antes) não deveria ver o
@@ -44,9 +60,29 @@
       currentUser = JSON.parse(localStorage.getItem('missao_aprovacao_auth_user') || 'null');
     } catch (_) {}
     if (currentUser && !currentUser.isGuest) {
-      window.location.href = '/jogar';
+      card.dataset.ticoAccountChecking = 'true';
+      cachedSessionStillValid().then((valid) => {
+        delete card.dataset.ticoAccountChecking;
+        if (valid) {
+          window.location.href = '/jogar';
+          return;
+        }
+        // Sessão em cache não é mais válida — não redireciona às cegas.
+        // Limpa o cache velho e deixa o formulário de entrar/cadastrar aparecer.
+        try {
+          localStorage.removeItem('missao_aprovacao_auth_user');
+          localStorage.removeItem('missao_aprovacao_user_profile');
+        } catch (_) {}
+        buildForm(card);
+      });
       return;
     }
+
+    buildForm(card);
+  }
+
+  function buildForm(card) {
+    if (card.dataset.ticoAccountReady === 'true') return;
 
     const notice = card.querySelector('#preview-notice');
     const fieldset = card.querySelector('fieldset[disabled]');
