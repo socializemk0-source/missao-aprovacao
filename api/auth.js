@@ -261,21 +261,42 @@ export default async function authHandler(req, res, deps = {}) {
 
     // ------------------------------------------------------------------------
     // ATUALIZAÇÃO DE PERFIL — sempre o do próprio chamador autenticado.
+    //
+    // PARCIAL de propósito: só entram no update os campos que o chamador
+    // realmente mandou. Ex.: trocar só a banca preferida (preferredBanca)
+    // não pode apagar bio/avatar/cidade/telefone já preenchidos — por
+    // isso nunca inventamos um default para um campo ausente aqui; quem
+    // decide "ausente vira default" é upsertProfile, e só no INSERT.
     // ------------------------------------------------------------------------
     if (action === 'update-profile') {
       if (!(await runRequireAuth(req, res))) return;
 
       const { fullName, name, bio, avatarUrl, photoUrl, targetExam, preferredBanca, city, phone, whatsapp } = body;
 
-      const updated = await upsertProfile(req.user.uid, {
-        fullName: (fullName || name || '').trim() || 'Estudante Concurseiro',
-        bio: typeof bio === 'string' ? bio.slice(0, 500) : '',
-        avatarUrl: typeof avatarUrl === 'string' ? avatarUrl : (photoUrl || ''),
-        targetExam: typeof targetExam === 'string' ? targetExam : 'Polícia Federal',
-        preferredBanca: typeof preferredBanca === 'string' ? preferredBanca : 'Cebraspe',
-        city: typeof city === 'string' ? city : 'Brasil',
-        phone: typeof phone === 'string' ? phone : (whatsapp || ''),
-      });
+      const fields = {};
+
+      const resolvedFullName = typeof fullName === 'string' ? fullName : (typeof name === 'string' ? name : undefined);
+      if (resolvedFullName !== undefined) {
+        const trimmed = resolvedFullName.trim();
+        if (!trimmed) {
+          return res.status(400).json({ error: 'O nome não pode ficar vazio.' });
+        }
+        fields.fullName = trimmed;
+      }
+      if (typeof bio === 'string') fields.bio = bio.slice(0, 500);
+      const resolvedAvatar = typeof avatarUrl === 'string' ? avatarUrl : (typeof photoUrl === 'string' ? photoUrl : undefined);
+      if (resolvedAvatar !== undefined) fields.avatarUrl = resolvedAvatar;
+      if (typeof targetExam === 'string') fields.targetExam = targetExam;
+      if (typeof preferredBanca === 'string') fields.preferredBanca = preferredBanca;
+      if (typeof city === 'string') fields.city = city;
+      const resolvedPhone = typeof phone === 'string' ? phone : (typeof whatsapp === 'string' ? whatsapp : undefined);
+      if (resolvedPhone !== undefined) fields.phone = resolvedPhone;
+
+      if (Object.keys(fields).length === 0) {
+        return res.status(400).json({ error: 'Nenhum campo válido para atualizar foi enviado.' });
+      }
+
+      const updated = await upsertProfile(req.user.uid, fields);
 
       return res.status(200).json({
         success: true,

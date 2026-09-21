@@ -3,7 +3,16 @@ import { db } from './index.js';
 import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.js';
 import { eq, desc, and, gte } from 'drizzle-orm';
 
-// Helper: Obter ou criar usuário
+// Helper: Obter ou criar usuário.
+//
+// Get-or-create de verdade: só define nome/e-mail/plano/XP/streak no
+// INSERT (primeira vez). Em conflito (uid já existe) NUNCA sobrescreve
+// nada — nem nome/e-mail nem, principalmente, plan/xp/streak — só devolve
+// a linha existente (com updatedAt tocado). Isso é o que torna as duas
+// chamadas existentes (sync-profile no cadastro, e a autorrecuperação em
+// get-profile) seguras para repetir: repetir uma "criação" nunca pode
+// virar um reset de progresso ou de plano PRO de quem já existe.
+// Para alterar dados de uma conta já existente, use updateUser/upsertProfile.
 export async function getOrCreateUser(data) {
   try {
     const result = await db.insert(users)
@@ -26,13 +35,6 @@ export async function getOrCreateUser(data) {
       .onConflictDoUpdate({
         target: users.uid,
         set: {
-          name: data.name,
-          email: data.email,
-          ...(data.targetExam ? { targetExam: data.targetExam } : {}),
-          ...(data.city ? { city: data.city } : {}),
-          ...(data.plan ? { plan: data.plan } : {}),
-          ...(data.xp !== undefined ? { xp: data.xp } : {}),
-          ...(data.streak !== undefined ? { streak: data.streak } : {}),
           updatedAt: new Date(),
         },
       })
@@ -291,13 +293,20 @@ export async function getProfileByUserId(userId) {
   }
 }
 
-// Salvar ou atualizar perfil do estudante (Supabase profiles)
+// Salvar ou atualizar perfil do estudante (Supabase profiles).
+//
+// Atualização PARCIAL de verdade: um campo ausente de `data` (undefined)
+// nunca é tocado em conflito (perfil já existente) — só campos realmente
+// enviados pelo chamador entram no SET. Sem isso, trocar só a banca (por
+// exemplo) apagava bio/avatar/cidade/telefone já preenchidos, porque o
+// chamador antigo sempre montava um objeto completo com defaults para os
+// campos que não mudaram. Defaults só valem no INSERT (perfil novo).
 export async function upsertProfile(userId, data) {
   try {
     const result = await db.insert(profiles)
       .values({
         id: userId,
-        fullName: data.fullName,
+        fullName: data.fullName || 'Estudante Concurseiro',
         bio: data.bio || '',
         avatarUrl: data.avatarUrl || '',
         targetExam: data.targetExam || 'Polícia Federal',
@@ -309,7 +318,7 @@ export async function upsertProfile(userId, data) {
       .onConflictDoUpdate({
         target: profiles.id,
         set: {
-          fullName: data.fullName,
+          ...(data.fullName !== undefined ? { fullName: data.fullName } : {}),
           ...(data.bio !== undefined ? { bio: data.bio } : {}),
           ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl } : {}),
           ...(data.targetExam !== undefined ? { targetExam: data.targetExam } : {}),
