@@ -68,17 +68,29 @@
   const TicoPlan = {
     config: PLAN_CONFIG,
 
+    // Só o plano que veio do servidor (get-profile, gravado no cache do
+    // usuário) conta. A chave solta 'missao_aprovacao_plan' nunca é gravada
+    // como 'pro' pelo app — aceitá-la só servia pra alguém se autopromover
+    // pelo console. Convidado nunca é PRO.
     getPlan() {
       try {
-        const stored = localStorage.getItem('missao_aprovacao_plan');
-        if (stored === 'pro') return 'pro';
         const userRaw = localStorage.getItem('missao_aprovacao_auth_user');
         if (userRaw) {
           const user = JSON.parse(userRaw);
-          if (user && user.plan === 'pro') return 'pro';
+          if (user && !user.isGuest && user.plan === 'pro') return 'pro';
         }
       } catch (_) {}
       return 'free';
+    },
+
+    // Chamado pelo bundle no reducer que inicia QUALQUER missão da trilha
+    // (botão da fase, "continuar de onde parei", ferramenta de missão) —
+    // um ponto só, em vez de interceptar botões no DOM. O conteúdo em si
+    // continua embarcado no bundle; isto barra o caminho normal de uso.
+    allowsChapter(chapterIndex) {
+      if (chapterIndex < PLAN_CONFIG.freeChapterLimit || this.isPro()) return true;
+      setTimeout(() => this.openModal('details', `🦉 O Capítulo ${chapterIndex + 1} é exclusivo do <strong>Plano PRO</strong>! Desbloqueie todos os 37 capítulos e 111 fases por apenas R$ 29,90/mês.`), 0);
+      return false;
     },
 
     getUser() {
@@ -644,53 +656,46 @@
       }
     },
 
+    // A trilha mostra UM capítulo por vez (.chapter-banner + 3 .level-node);
+    // o índice vem do <select class="chapter-quick-select">. O bloqueio de
+    // verdade está em allowsChapter (chamado pelo bundle); aqui é só a
+    // sinalização visual. Toda escrita só acontece se algo mudou — este
+    // método roda a cada mutação do DOM.
     decorateChapterCards(isPro) {
-      // Percorrer os capítulos na trilha
-      const chapterCards = document.querySelectorAll('.vlp-chapter-card');
-      chapterCards.forEach((card, idx) => {
-        // Índices 0 a 4 (Capítulos 1 a 5) são gratuitos
-        // Índices >= 5 (Capítulos 6 a 37) fazem parte do Plano PRO
-        const isAdvancedChapter = idx >= PLAN_CONFIG.freeChapterLimit;
+      const limit = PLAN_CONFIG.freeChapterLimit;
+      const setClass = (el, cls, on) => { if (el.classList.contains(cls) !== on) el.classList.toggle(cls, on); };
 
-        let badge = card.querySelector('.tico-chapter-tier-badge');
-        if (!badge) {
-          badge = document.createElement('div');
-          badge.className = 'tico-chapter-tier-badge';
-          const header = card.querySelector('.vlp-chapter-header') || card.firstElementChild;
-          if (header) header.appendChild(badge);
-        }
+      document.querySelectorAll('.chapter-picker button').forEach((btn, idx) => {
+        setClass(btn, 'tico-chapter-pro', idx >= limit && !isPro);
+      });
 
-        if (isAdvancedChapter) {
-          if (isPro) {
-            badge.className = 'tico-chapter-tier-badge is-pro';
-            badge.innerHTML = '<span>✨ Desbloqueado com Plano PRO</span>';
-            card.classList.remove('tico-chapter-locked-by-plan');
-          } else {
-            badge.className = 'tico-chapter-tier-badge is-pro-exclusive';
-            badge.innerHTML = '<span>👑 Exclusivo Plano PRO (R$ 29,90/mês)</span>';
-            card.classList.add('tico-chapter-locked-by-plan');
+      const banner = document.querySelector('.chapter-banner');
+      const select = document.querySelector('.chapter-quick-select');
+      if (!banner || !select) return;
+      const chapterIndex = Number(select.value);
+      if (!Number.isInteger(chapterIndex)) return;
 
-            // Interceptar cliques nas fases deste capítulo avançado se for gratuito
-            const phaseBtns = card.querySelectorAll('.vlp-phase-btn');
-            phaseBtns.forEach(btn => {
-              if (!btn.dataset.proIntercepted) {
-                btn.dataset.proIntercepted = 'true';
-                btn.addEventListener('click', (e) => {
-                  if (!TicoPlan.isPro()) {
-                    e.stopImmediatePropagation();
-                    e.preventDefault();
-                    TicoPlan.openModal('details', `🦉 O Capítulo ${idx + 1} é exclusivo do <strong>Plano PRO</strong>! Desbloqueie todos os 37 capítulos e 111 fases por apenas R$ 29,90/mês.`);
-                  }
-                }, true);
-              }
-            });
-          }
-        } else {
-          // Capítulos 1 a 5
-          badge.className = 'tico-chapter-tier-badge is-free-unlocked';
-          badge.innerHTML = '<span>🆓 Modo Gratuito</span>';
-          card.classList.remove('tico-chapter-locked-by-plan');
-        }
+      const locked = chapterIndex >= limit && !isPro;
+      const tier = chapterIndex < limit ? 'free' : isPro ? 'pro' : 'locked';
+      const labels = {
+        free: '🆓 Modo Gratuito',
+        pro: '✨ Desbloqueado com Plano PRO',
+        locked: '👑 Exclusivo Plano PRO (R$ 29,90/mês)',
+      };
+
+      let badge = banner.querySelector('.tico-chapter-tier-badge');
+      if (!badge) {
+        badge = document.createElement('div');
+        banner.querySelector('.chapter-body')?.appendChild(badge);
+      }
+      if (badge.dataset.tier !== tier) {
+        badge.dataset.tier = tier;
+        badge.className = `tico-chapter-tier-badge is-${tier}`;
+        badge.textContent = labels[tier];
+      }
+
+      document.querySelectorAll('.map-stop .level-node').forEach((btn) => {
+        setClass(btn, 'tico-phase-locked-by-plan', locked);
       });
     },
 
@@ -721,11 +726,29 @@
       }
     },
 
+    // O cache local do plano pode estar velho (assinatura cancelada pelo
+    // webhook em outro momento, outro aparelho...). Revalida no servidor a
+    // cada carregamento para quem está logado de verdade.
+    async refreshPlanOnLoad() {
+      const user = this.getUser();
+      if (!user || user.isGuest) return;
+      for (let i = 0; i < 25 && !window.MissaoFirebase?.refreshPlanFromServer; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      if (!window.MissaoFirebase?.refreshPlanFromServer) return;
+      try {
+        await window.MissaoFirebase.refreshPlanFromServer();
+        this.updateUI();
+      } catch (_) {}
+    },
+
     init() {
       window.TicoPlan = this;
 
       this.updateUI();
+      const returningFromCheckout = new URLSearchParams(window.location.search).has('payment');
       this.checkPaymentReturn();
+      if (!returningFromCheckout) this.refreshPlanOnLoad();
 
       window.addEventListener('auth_state_changed', () => {
         setTimeout(() => this.updateUI(), 200);

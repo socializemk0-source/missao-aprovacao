@@ -6493,20 +6493,21 @@ button, a, input, select, textarea, .mascot, .vlp-phase-btn, .fcm-bell-btn, .ban
 .tico-chapter-tier-badge {
   display: inline-flex;
   align-items: center;
+  width: fit-content;
+  margin-top: 8px;
   padding: 4px 10px;
   border-radius: 9999px;
   font-size: 11px;
   font-weight: 700;
-  margin-left: auto;
 }
 
-.tico-chapter-tier-badge.is-free-unlocked {
+.tico-chapter-tier-badge.is-free {
   background: #f1f5f9;
   color: #475569;
   border: 1px solid #cbd5e1;
 }
 
-.tico-chapter-tier-badge.is-pro-exclusive {
+.tico-chapter-tier-badge.is-locked {
   background: #fef3c7;
   color: #92400e;
   border: 1px solid #fde68a;
@@ -6519,10 +6520,14 @@ button, a, input, select, textarea, .mascot, .vlp-phase-btn, .fcm-bell-btn, .ban
   border: 1px solid #bbf7d0;
 }
 
-/* Capítulos com restrição visual do Plano PRO no Modo Gratuito */
-.vlp-chapter-card.tico-chapter-locked-by-plan .vlp-phase-btn {
-  position: relative;
-  cursor: pointer;
+/* Fases de capítulo PRO no Modo Gratuito: clicáveis (abrem o upgrade), mas esmaecidas */
+.level-node.tico-phase-locked-by-plan {
+  filter: grayscale(0.85);
+  opacity: 0.6;
+}
+
+.chapter-picker button.tico-chapter-pro::after {
+  content: ' 👑';
 }
 
 .tico-plan-custom-alert {
