@@ -25,6 +25,7 @@ export function createStore() {
       user_A: [],
       user_B: [],
     },
+    dailyMissions: {}, // userId -> [{ userId, dateStr, missionId, progress, target, completed, claimed }]
     subscriptions: {}, // userId -> { userId, providerCustomerId, providerSubscriptionId, status, ... }
     subscriptionPayments: [], // { providerPaymentId, providerSubscriptionId, userId, status, ... }
   };
@@ -100,8 +101,40 @@ export function buildNamedExports(store) {
       }
     },
     getEssaysByUser: async (userId) => store.essays[userId] || [],
-    updateDailyMission: async () => ({}),
-    getDailyMissions: async () => [],
+    updateDailyMission: async (userId, dateStr, missionId, progress, target, completed, claimed) => {
+      const list = (store.dailyMissions[userId] = store.dailyMissions[userId] || []);
+      let row = list.find((m) => m.dateStr === dateStr && m.missionId === missionId);
+      if (!row) {
+        row = { userId, dateStr, missionId };
+        list.push(row);
+      }
+      Object.assign(row, { progress, target, completed, claimed });
+      return row;
+    },
+    getDailyMissions: async (userId, dateStr) =>
+      (store.dailyMissions[userId] || []).filter((m) => m.dateStr === dateStr),
+    getClaimedMissionIds: async (userId) =>
+      (store.dailyMissions[userId] || []).filter((m) => m.claimed).map((m) => m.missionId),
+    // Sem await entre checar e marcar = atômico, como o lock da versão real.
+    claimMissionReward: async ({ userId, dateStr, missionId, target, xp }) => {
+      const row = (store.dailyMissions[userId] || []).find((m) => m.dateStr === dateStr && m.missionId === missionId);
+      if (!row || (row.progress || 0) < target) return { status: 'not_completed' };
+      if (row.claimed) return { status: 'already_claimed' };
+      Object.assign(row, { claimed: 1, completed: 1 });
+      store.users[userId].xp = (store.users[userId].xp || 0) + xp;
+      return { status: 'claimed', user: store.users[userId] };
+    },
+    claimBonusChest: async ({ userId, dateStr, chestId, missionIds, requiredCompleted, xp }) => {
+      const list = (store.dailyMissions[userId] = store.dailyMissions[userId] || []);
+      const rows = list.filter((m) => m.dateStr === dateStr);
+      if (rows.some((m) => m.missionId === chestId && m.claimed)) return { status: 'already_claimed' };
+      if (rows.filter((m) => missionIds.includes(m.missionId) && m.completed).length < requiredCompleted) {
+        return { status: 'not_completed' };
+      }
+      list.push({ userId, dateStr, missionId: chestId, progress: 1, target: 1, completed: 1, claimed: 1 });
+      store.users[userId].xp = (store.users[userId].xp || 0) + xp;
+      return { status: 'claimed', user: store.users[userId] };
+    },
     recordViewedTipInDb: async () => ({}),
     getViewedTipsByUserId: async (userId) => store.tips[userId] || [],
 

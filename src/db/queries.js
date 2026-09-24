@@ -314,6 +314,76 @@ export async function getDailyMissions(userId, dateStr) {
   }
 }
 
+// Ids de todas as missões/baús já resgatados pelo usuário (qualquer dia).
+export async function getClaimedMissionIds(userId) {
+  try {
+    const rows = await db.select({ missionId: dailyMissions.missionId }).from(dailyMissions)
+      .where(and(eq(dailyMissions.userId, userId), eq(dailyMissions.claimed, 1)));
+    return rows.map((r) => r.missionId);
+  } catch (error) {
+    console.error('Database query getClaimedMissionIds failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Resgates de recompensa: checar + marcar + somar XP numa transação só,
+// sob um advisory lock por usuário+dia — dois cliques (ou duas abas) ao
+// mesmo tempo não podem conceder a mesma recompensa duas vezes. O XP é
+// somado no próprio banco (xp = xp + n), sem ler-e-regravar.
+function lockDailyRewards(tx, userId, dateStr) {
+  return tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`daily_reward:${userId}:${dateStr}`}))`);
+}
+
+function addXp(tx, userId, xp) {
+  return tx.update(users)
+    .set({ xp: sql`coalesce(${users.xp}, 0) + ${xp}`, updatedAt: new Date() })
+    .where(eq(users.uid, userId))
+    .returning();
+}
+
+export async function claimMissionReward({ userId, dateStr, missionId, target, xp }) {
+  try {
+    return await db.transaction(async (tx) => {
+      await lockDailyRewards(tx, userId, dateStr);
+      const [row] = await tx.select().from(dailyMissions)
+        .where(and(eq(dailyMissions.userId, userId), eq(dailyMissions.dateStr, dateStr), eq(dailyMissions.missionId, missionId)))
+        .limit(1);
+      if (!row || (row.progress || 0) < target) return { status: 'not_completed' };
+      if (row.claimed) return { status: 'already_claimed' };
+      await tx.update(dailyMissions)
+        .set({ claimed: 1, completed: 1, updatedAt: new Date() })
+        .where(eq(dailyMissions.id, row.id));
+      const [user] = await addXp(tx, userId, xp);
+      return { status: 'claimed', user };
+    });
+  } catch (error) {
+    console.error('Database query claimMissionReward failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+export async function claimBonusChest({ userId, dateStr, chestId, missionIds, requiredCompleted, xp }) {
+  try {
+    return await db.transaction(async (tx) => {
+      await lockDailyRewards(tx, userId, dateStr);
+      const rows = await tx.select().from(dailyMissions)
+        .where(and(eq(dailyMissions.userId, userId), eq(dailyMissions.dateStr, dateStr)));
+      if (rows.some((r) => r.missionId === chestId && r.claimed)) return { status: 'already_claimed' };
+      if (rows.filter((r) => missionIds.includes(r.missionId) && r.completed).length < requiredCompleted) {
+        return { status: 'not_completed' };
+      }
+      await tx.insert(dailyMissions).values({
+        userId, dateStr, missionId: chestId, progress: 1, target: 1, completed: 1, claimed: 1, updatedAt: new Date(),
+      });
+      const [user] = await addXp(tx, userId, xp);
+      return { status: 'claimed', user };
+    });
+  } catch (error) {
+    console.error('Database query claimBonusChest failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
 // Obter todos os usuários para o painel de auditoria
 export async function getAllUsers() {
   try {

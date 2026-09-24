@@ -539,12 +539,19 @@ export async function getUserDailyProgress(userId, dateStr = new Date().toISOStr
     const progressMap = {};
     const completed = [];
     const claimed = [];
+    let bonusClaimed = false;
+    const bonusId = `daily-${dateStr}-bonus`;
     missions.forEach((m) => {
+      // O baú é gravado como uma linha própria — não conta como missão.
+      if (m.missionId === bonusId) {
+        bonusClaimed = Boolean(m.claimed);
+        return;
+      }
       progressMap[m.missionId] = m.progress;
       if (m.completed) completed.push(m.missionId);
       if (m.claimed) claimed.push(m.missionId);
     });
-    return { date: dateStr, progressMap, completed, claimed, bonusClaimed: false };
+    return { date: dateStr, progressMap, completed, claimed, bonusClaimed };
   } catch (_) {
     return { date: dateStr, progressMap: {}, completed: [], claimed: [], bonusClaimed: false };
   }
@@ -562,48 +569,31 @@ export async function updateDailyMissionProgress(_userId, dateStr, missionId, in
   return prog;
 }
 
-export async function claimDailyMissionReward(userId, dateStr, missionId, xpReward = 50) {
-  const prog = await getUserDailyProgress(userId, dateStr);
-  try {
-    await callApiData('save-mission', { dateStr, missionId, progress: prog.progressMap[missionId] || 1, target: 1, completed: 1, claimed: 1 });
-  } catch (_) {}
-  if (!prog.claimed.includes(missionId)) prog.claimed.push(missionId);
-
-  const cur = getCurrentUser();
-  if (cur) {
-    const newXp = (cur.xp || 0) + xpReward;
-    await syncUserStats(cur.uid, { xp: newXp });
-  }
-  return prog;
+// Resgates são concedidos pelo SERVIDOR (valor definido lá, uma única vez
+// por missão/dia). O cliente só pede e atualiza o cache com o que voltar.
+function applyServerUser(payload) {
+  if (!payload?.user) return;
+  const current = getCurrentUser();
+  if (current) persistUser({ ...current, ...payload.user });
 }
 
-export async function claimDailyBonusChest(_userId, _dateStr, bonusXp = 100) {
-  const cur = getCurrentUser();
-  if (cur) {
-    const newXp = (cur.xp || 0) + bonusXp;
-    await syncUserStats(cur.uid, { xp: newXp });
-  }
+export async function claimDailyMissionReward(userId, dateStr, missionId) {
+  const payload = await callApiData('claim-mission', { dateStr, missionId });
+  if (!payload?.success) return null;
+  applyServerUser(payload);
+  return getUserDailyProgress(userId, dateStr);
+}
+
+export async function claimDailyBonusChest(_userId, dateStr = new Date().toISOString().split('T')[0]) {
+  const payload = await callApiData('claim-chest', { dateStr });
+  if (!payload?.success) return false;
+  applyServerUser(payload);
   return true;
 }
 
 // -----------------------------------------------------------------------
 // Redações
 // -----------------------------------------------------------------------
-
-export async function saveUserEssay(_userId, essayData) {
-  const essayId = essayData.id || `redacao_${Date.now()}`;
-  try {
-    await callApiData('save-essay', {
-      essayId,
-      topic: essayData.tema || 'Tema de Redação',
-      banca: essayData.banca,
-      content: essayData.texto || '',
-      score: essayData.nota || 0,
-      feedback: essayData.feedback || '',
-    });
-  } catch (_) {}
-  return essayId;
-}
 
 export async function getUserEssays(_userId) {
   try {
@@ -710,7 +700,6 @@ const SupabaseApplet = {
   updateDailyMissionProgress,
   claimDailyMissionReward,
   claimDailyBonusChest,
-  saveUserEssay,
   getUserEssays,
   saveUserPreferredBanca,
   getUserPreferredBanca,
