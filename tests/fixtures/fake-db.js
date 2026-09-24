@@ -70,16 +70,36 @@ export function buildNamedExports(store) {
     },
     getUserProgress: async (userId) => store.progress[userId] || null,
     saveEssay: async (data) => {
+      if (store.__essayWriteDelayMs) await new Promise((r) => setTimeout(r, store.__essayWriteDelayMs));
       const record = { ...data, createdAt: data.createdAt || new Date() };
       store.essays[data.userId] = store.essays[data.userId] || [];
       store.essays[data.userId].push(record);
       return record;
     },
-    getEssaysByUser: async (userId) => store.essays[userId] || [],
-    countRecentEssaysByUser: async (userId, since) => {
-      const list = store.essays[userId] || [];
-      return list.filter((e) => e.createdAt && new Date(e.createdAt).getTime() >= since.getTime()).length;
+    // Contar + inserir sem nenhum await no meio = atômico no event loop,
+    // o mesmo efeito do pg_advisory_xact_lock da implementação real.
+    reserveEssayQuota: async ({ userId, since, limit, essay }) => {
+      const list = (store.essays[userId] = store.essays[userId] || []);
+      const recent = list.filter((e) => e.createdAt && new Date(e.createdAt).getTime() >= since.getTime()).length;
+      if (recent >= limit) return null;
+      const record = { ...essay, userId, createdAt: new Date() };
+      list.push(record);
+      return record;
     },
+    completeEssayReservation: async (essayId, fields) => {
+      if (store.__essayWriteDelayMs) await new Promise((r) => setTimeout(r, store.__essayWriteDelayMs));
+      for (const list of Object.values(store.essays)) {
+        const record = list.find((e) => e.essayId === essayId);
+        if (record) return Object.assign(record, fields);
+      }
+      return null;
+    },
+    releaseEssayReservation: async (essayId) => {
+      for (const [userId, list] of Object.entries(store.essays)) {
+        store.essays[userId] = list.filter((e) => e.essayId !== essayId);
+      }
+    },
+    getEssaysByUser: async (userId) => store.essays[userId] || [],
     updateDailyMission: async () => ({}),
     getDailyMissions: async () => [],
     recordViewedTipInDb: async () => ({}),

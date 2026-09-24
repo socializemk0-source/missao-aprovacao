@@ -1,7 +1,7 @@
 // src/db/queries.js
 import { db } from './index.js';
 import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.js';
-import { eq, desc, and, gte } from 'drizzle-orm';
+import { eq, desc, and, gte, sql } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário.
 //
@@ -209,15 +209,57 @@ export async function getEssaysByUser(userId) {
   }
 }
 
-// Contar correções de redação de um usuário desde uma data (limite
-// semanal do Plano Grátis em api/redacao.js — o PRO não tem limite).
-export async function countRecentEssaysByUser(userId, since) {
+// Reserva uma vaga na cota de correções do Plano Grátis ANTES de chamar a
+// IA. Contar e inserir precisam ser uma operação só: com um count seguido
+// de um insert soltos, duas requisições simultâneas do mesmo usuário viam
+// "0 correções" e as duas passavam. O advisory lock por usuário (liberado
+// sozinho no fim da transação) serializa só as reservas desse usuário.
+// Devolve a linha reservada, ou null se a cota já estiver esgotada.
+export async function reserveEssayQuota({ userId, since, limit, essay }) {
   try {
-    const rows = await db.select({ id: essays.id }).from(essays)
-      .where(and(eq(essays.userId, userId), gte(essays.createdAt, since)));
-    return rows.length;
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`essay_quota:${userId}`}))`);
+      const rows = await tx.select({ id: essays.id }).from(essays)
+        .where(and(eq(essays.userId, userId), gte(essays.createdAt, since)));
+      if (rows.length >= limit) return null;
+      const inserted = await tx.insert(essays)
+        .values({
+          essayId: essay.essayId,
+          userId,
+          topic: essay.topic,
+          banca: essay.banca || 'Cebraspe',
+          content: essay.content,
+          createdAt: new Date(),
+        })
+        .returning();
+      return inserted[0];
+    });
   } catch (error) {
-    console.error('Database query countRecentEssaysByUser failed:', error);
+    console.error('Database query reserveEssayQuota failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Preenche a reserva com o resultado da correção.
+export async function completeEssayReservation(essayId, { score, feedback, criterios }) {
+  try {
+    const result = await db.update(essays)
+      .set({ score, feedback, criterios })
+      .where(eq(essays.essayId, essayId))
+      .returning();
+    return result[0] || null;
+  } catch (error) {
+    console.error('Database query completeEssayReservation failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Devolve a vaga quando a correção não aconteceu (erro da IA, timeout...).
+export async function releaseEssayReservation(essayId) {
+  try {
+    await db.delete(essays).where(eq(essays.essayId, essayId));
+  } catch (error) {
+    console.error('Database query releaseEssayReservation failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }

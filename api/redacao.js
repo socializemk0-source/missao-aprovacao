@@ -1,5 +1,5 @@
 import { requireAuth } from "../middleware/requireAuth.js";
-import { getUserByUid, countRecentEssaysByUser, saveEssay } from "../src/db/queries.js";
+import { getUserByUid, saveEssay, reserveEssayQuota, completeEssayReservation, releaseEssayReservation } from "../src/db/queries.js";
 
 // Limite semanal de correções por IA do Plano Grátis (o PRO não tem limite
 // — ver PLAN_CONFIG.freeFeatures/proFeatures.redacao em public/tico-plans.js).
@@ -477,26 +477,13 @@ async function handleEssay(request, env, uid, send = fetch) {
 	if (!topic || !essayBanks.includes(body?.bank) || typeof body?.text !== "string" || body.text.length > 1e4 || wordCount(body.text) < 80) return json({ error: "Escolha um tema e escreva pelo menos 80 palavras, até 10.000 caracteres." }, 400);
 
 	// Limite semanal de correções por IA no Plano Grátis — o PRO (R$ 29,90/
-	// mês) não tem limite. Verificado ANTES de chamar a OpenAI para nunca
-	// gastar a API com uma solicitação que já sabemos que será recusada.
+	// mês) não tem limite.
 	let userPlan = "free";
 	try {
 		const userRecord = await getUserByUid(uid);
 		userPlan = userRecord?.plan === "pro" ? "pro" : "free";
 	} catch {
 		return json({ code: "LIMITE_INDISPONIVEL", error: "Não foi possível confirmar seu plano agora. Seu texto continua salvo. Tente novamente em instantes." }, 503);
-	}
-	if (userPlan !== "pro") {
-		let recentCount;
-		try {
-			recentCount = await countRecentEssaysByUser(uid, new Date(Date.now() - ESSAY_LIMIT_WINDOW_MS));
-		} catch {
-			return json({ code: "LIMITE_INDISPONIVEL", error: "Não foi possível confirmar seu limite de correções agora. Seu texto continua salvo. Tente novamente em instantes." }, 503);
-		}
-		if (recentCount >= FREE_WEEKLY_ESSAY_LIMIT) return json({
-			code: "LIMITE_PLANO_GRATIS",
-			error: `O Plano Grátis permite ${FREE_WEEKLY_ESSAY_LIMIT} correção por IA a cada 7 dias. Assine o Plano PRO (R$ 29,90/mês) para correções ilimitadas. Seu texto continua salvo.`
-		}, 403);
 	}
 
 	const now = Date.now(), key = (request.headers.get("x-real-ip") || "shared").slice(0, 120);
@@ -508,6 +495,31 @@ async function handleEssay(request, env, uid, send = fetch) {
 		time: count && now - count.time < 6e4 ? count.time : now,
 		count: count && now - count.time < 6e4 ? count.count + 1 : 1
 	});
+
+	// A vaga do Plano Grátis é RESERVADA (contar + inserir numa operação
+	// atômica no banco) antes de chamar a OpenAI — só contar deixava duas
+	// requisições simultâneas passarem. Se a correção não acontecer, a vaga
+	// é devolvida no finally lá embaixo.
+	let reservationId = null;
+	if (userPlan !== "pro") {
+		let reserved;
+		try {
+			reserved = await reserveEssayQuota({
+				userId: uid,
+				since: new Date(Date.now() - ESSAY_LIMIT_WINDOW_MS),
+				limit: FREE_WEEKLY_ESSAY_LIMIT,
+				essay: { essayId: crypto.randomUUID(), topic: topic.title, banca: body.bank, content: body.text }
+			});
+		} catch {
+			return json({ code: "LIMITE_INDISPONIVEL", error: "Não foi possível confirmar seu limite de correções agora. Seu texto continua salvo. Tente novamente em instantes." }, 503);
+		}
+		if (!reserved) return json({
+			code: "LIMITE_PLANO_GRATIS",
+			error: `O Plano Grátis permite ${FREE_WEEKLY_ESSAY_LIMIT} correção por IA a cada 7 dias. Assine o Plano PRO (R$ 29,90/mês) para correções ilimitadas. Seu texto continua salvo.`
+		}, 403);
+		reservationId = reserved.essayId;
+	}
+	let delivered = false;
 	const string = { type: "string" };
 	const object = (properties) => ({
 		type: "object",
@@ -595,22 +607,37 @@ async function handleEssay(request, env, uid, send = fetch) {
 			const normalizedText = normalizeWhitespaceForQuoteMatch(body.text);
 			return failure(Array.isArray(report?.annotations) && report.annotations.some((a) => typeof a?.quote === "string" && !normalizedText.includes(normalizeWhitespaceForQuoteMatch(a.quote))) ? "IA_TRECHO_DIVERGENTE" : "IA_AVALIACAO_INVALIDA", "A avaliação não passou pela conferência de notas, critérios ou trechos citados. Nenhuma nota foi registrada.");
 		}
-		// Registra a correção concluída para valer no limite semanal do Plano
-		// Grátis — nunca bloqueia a resposta ao aluno se esse registro falhar.
-		saveEssay({
-			essayId: crypto.randomUUID(),
-			userId: uid,
-			topic: topic.title,
-			banca: body.bank,
-			content: body.text,
+		delivered = true;
+		// Gravado ANTES de responder: numa função serverless, uma promise
+		// solta pode ser congelada/descartada assim que a resposta sai. Uma
+		// falha aqui não tira do aluno a correção já feita (e a vaga do
+		// grátis continua consumida, como deve).
+		const essayFields = {
 			score: report.criteria.reduce((sum, c) => sum + c.score, 0),
 			feedback: report.summary,
 			criterios: JSON.stringify(report.criteria)
-		}).catch((err) => console.error("essay_correction_persist_failed", err.message));
+		};
+		try {
+			if (reservationId) await completeEssayReservation(reservationId, essayFields);
+			else await saveEssay({
+				essayId: crypto.randomUUID(),
+				userId: uid,
+				topic: topic.title,
+				banca: body.bank,
+				content: body.text,
+				...essayFields
+			});
+		} catch (err) {
+			console.error("essay_correction_persist_failed", err.message);
+		}
 		return json({ report });
 	} catch (error) {
 		if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return failure("IA_TEMPO_ESGOTADO", "O serviço de IA não concluiu a solicitação no prazo.");
 		return failure("IA_CONEXAO", "Não foi possível receber ou interpretar a resposta do serviço de IA.");
+	} finally {
+		if (reservationId && !delivered) {
+			await releaseEssayReservation(reservationId).catch((err) => console.error("essay_quota_release_failed", err.message));
+		}
 	}
 }
 //#endregion
