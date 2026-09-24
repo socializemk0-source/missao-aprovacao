@@ -46,6 +46,15 @@ export const userProgress = pgTable('user_progress', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Snapshot completo do estado do jogo (trilha) por usuário — ver
+// supabase/migrations/20260924000000_create_game_snapshots.sql.
+export const gameSnapshots = pgTable('game_snapshots', {
+  userId: text('user_id').primaryKey(),
+  state: text('state').notNull(),
+  xp: integer('xp').notNull().default(0),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // Tabela de Redações Enviadas e Avaliadas
 export const essays = pgTable('essays', {
   id: serial('id').primaryKey(),

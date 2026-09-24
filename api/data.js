@@ -1,6 +1,7 @@
 import { requireAuth } from '../middleware/requireAuth.js';
 import { queryLeaderboardEntries } from '../src/leaderboard.js';
 import { computeStatsUpdate } from '../src/player-stats.js';
+import { parseGameSnapshot } from '../src/game-snapshot.js';
 import {
   missionDefinitions,
   findMission,
@@ -16,6 +17,8 @@ import {
   syncLeaderboardEntry,
   saveUserProgress,
   getUserProgress,
+  getGameSnapshot,
+  saveGameSnapshot,
   getEssaysByUser,
   updateDailyMission,
   getDailyMissions,
@@ -50,6 +53,24 @@ function publicUser(user) {
   if (!user) return user;
   const { passwordHash: _omit, ...rest } = user;
   return rest;
+}
+
+// save-stats e save-game passam pelas mesmas regras de integridade.
+async function applyStatsUpdate(uid, input) {
+  const current = await getUserByUid(uid);
+  if (!current) return null;
+  const claimedIds = await getClaimedMissionIds(uid);
+  const rewardXp = claimedIds.reduce((sum, id) => sum + rewardXpForMissionId(id), 0);
+  const fields = computeStatsUpdate({ current, input, rewardXp });
+  if (Object.keys(fields).length === 0) return current;
+  const updated = await updateUser(uid, fields);
+  await syncLeaderboardFor(uid, updated);
+  return updated;
+}
+
+function snapshotSummary(snap, withState) {
+  if (!snap) return null;
+  return { xp: snap.xp, updatedAt: snap.updatedAt, ...(withState ? { state: snap.state } : {}) };
 }
 
 const CLAIM_REFUSALS = {
@@ -96,15 +117,40 @@ export default async function dataHandler(req, res) {
   if (action === 'save-stats') {
     if (!(await runRequireAuth(req, res))) return;
     try {
-      const current = await getUserByUid(req.user.uid);
-      if (!current) return res.status(404).json({ success: false, error: 'Perfil não encontrado.' });
-      const claimedIds = await getClaimedMissionIds(req.user.uid);
-      const rewardXp = claimedIds.reduce((sum, id) => sum + rewardXpForMissionId(id), 0);
-      const fields = computeStatsUpdate({ current, input: req.body || {}, rewardXp });
-      if (Object.keys(fields).length === 0) return res.status(200).json({ success: true, user: publicUser(current) });
-      const updated = await updateUser(req.user.uid, fields);
-      await syncLeaderboardFor(req.user.uid, updated);
+      const updated = await applyStatsUpdate(req.user.uid, req.body || {});
+      if (!updated) return res.status(404).json({ success: false, error: 'Perfil não encontrado.' });
       return res.status(200).json({ success: true, user: publicUser(updated) });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  // 1.1c Snapshot completo do jogo (trilha) — ver src/game-snapshot.js
+  if (action === 'get-game') {
+    if (!(await runRequireAuth(req, res))) return;
+    try {
+      const snap = await getGameSnapshot(req.user.uid);
+      return res.status(200).json({ success: true, snapshot: snapshotSummary(snap, true) });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  if (action === 'save-game') {
+    if (!(await runRequireAuth(req, res))) return;
+    try {
+      const parsed = parseGameSnapshot(req.body?.state);
+      if (parsed.error) return res.status(parsed.status).json({ success: false, error: parsed.error });
+
+      const saved = await saveGameSnapshot(req.user.uid, req.body.state, parsed.xp);
+      if (!saved) {
+        const current = await getGameSnapshot(req.user.uid);
+        return res.status(200).json({ success: true, accepted: false, snapshot: snapshotSummary(current, false) });
+      }
+
+      await saveUserProgress(req.user.uid, JSON.stringify(parsed.completed), parsed.answered, parsed.correct);
+      await applyStatsUpdate(req.user.uid, { xp: parsed.xp });
+      return res.status(200).json({ success: true, accepted: true, snapshot: snapshotSummary(saved, false) });
     } catch (e) {
       return res.status(500).json({ success: false, error: e.message });
     }

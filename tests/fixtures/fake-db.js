@@ -26,6 +26,7 @@ export function createStore() {
       user_B: [],
     },
     dailyMissions: {}, // userId -> [{ userId, dateStr, missionId, progress, target, completed, claimed }]
+    gameSnapshots: {}, // userId -> { userId, state, xp, updatedAt }
     subscriptions: {}, // userId -> { userId, providerCustomerId, providerSubscriptionId, status, ... }
     subscriptionPayments: [], // { providerPaymentId, providerSubscriptionId, userId, status, ... }
   };
@@ -70,6 +71,13 @@ export function buildNamedExports(store) {
       return store.progress[userId];
     },
     getUserProgress: async (userId) => store.progress[userId] || null,
+    getGameSnapshot: async (userId) => store.gameSnapshots[userId] || null,
+    saveGameSnapshot: async (userId, state, xp) => {
+      const existing = store.gameSnapshots[userId];
+      if (existing && existing.xp > xp) return null; // mesma regra do WHERE real
+      store.gameSnapshots[userId] = { userId, state, xp, updatedAt: new Date() };
+      return store.gameSnapshots[userId];
+    },
     saveEssay: async (data) => {
       if (store.__essayWriteDelayMs) await new Promise((r) => setTimeout(r, store.__essayWriteDelayMs));
       const record = { ...data, createdAt: data.createdAt || new Date() };

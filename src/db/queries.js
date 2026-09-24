@@ -1,6 +1,6 @@
 // src/db/queries.js
 import { db } from './index.js';
-import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments } from './schema.js';
+import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments, gameSnapshots } from './schema.js';
 import { eq, desc, and, gte, sql } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário.
@@ -172,6 +172,37 @@ export async function getUserProgress(userId) {
     return res[0] || null;
   } catch (error) {
     console.error('Database query getUserProgress failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+export async function getGameSnapshot(userId) {
+  try {
+    const res = await db.select().from(gameSnapshots).where(eq(gameSnapshots.userId, userId)).limit(1);
+    return res[0] || null;
+  } catch (error) {
+    console.error('Database query getGameSnapshot failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Grava o snapshot só se ele não estiver ATRÁS do que já está salvo (o XP
+// do jogo só cresce). A condição fica no próprio ON CONFLICT, então dois
+// aparelhos enviando ao mesmo tempo não conseguem fazer a nuvem regredir.
+// Devolve a linha gravada, ou null se foi recusado por ter menos XP.
+export async function saveGameSnapshot(userId, state, xp) {
+  try {
+    const result = await db.insert(gameSnapshots)
+      .values({ userId, state, xp, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: gameSnapshots.userId,
+        set: { state, xp, updatedAt: new Date() },
+        setWhere: sql`${gameSnapshots.xp} <= ${xp}`,
+      })
+      .returning();
+    return result[0] || null;
+  } catch (error) {
+    console.error('Database query saveGameSnapshot failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }

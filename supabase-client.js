@@ -463,10 +463,11 @@ export async function syncUserStats(_userId, stats) {
   } catch (_) {}
 }
 
-export async function syncMissionProgress(_userId, missionId, score, total) {
-  try {
-    await callApiData('save-mission', { dateStr: new Date().toISOString().split('T')[0], missionId, progress: score, target: total, completed: 1 });
-  } catch (_) {}
+// O botão "sincronizar" do perfil chamava isto com ids de FASES da trilha,
+// gravando-as como se fossem missões diárias (o servidor agora recusa).
+// O progresso da trilha vai para a nuvem inteiro via startGameCloudSync.
+export async function syncMissionProgress() {
+  uploadGameSnapshot();
 }
 
 export async function loadUserCloudProgress(_userId) {
@@ -487,7 +488,15 @@ export async function getUserDetailedProgress(_userId) {
       const total = p.totalQuestionsAnswered || 0;
       const correct = p.correctAnswers || 0;
       return {
-        totalCompleted: Array.isArray(p.completedPhases) ? p.completedPhases.length : 0,
+        totalCompleted: (() => {
+          // A coluna é texto (JSON) no banco — antes só contava se já viesse array.
+          try {
+            const phases = typeof p.completedPhases === 'string' ? JSON.parse(p.completedPhases) : p.completedPhases;
+            return Array.isArray(phases) ? phases.length : 0;
+          } catch (_) {
+            return 0;
+          }
+        })(),
         totalQuestionsAnswered: total,
         totalCorrect: correct,
         accuracy: total > 0 ? Math.round((correct / total) * 100) : 100,
@@ -736,6 +745,82 @@ if (typeof window !== 'undefined') {
   } catch (_) {
     // Sem sessão válida ainda (ou servidor indisponível) — segue normal.
   }
+})();
+
+// -----------------------------------------------------------------------
+// Progresso da trilha na nuvem
+//
+// O jogo (bundle) guarda o estado inteiro em localStorage, na chave
+// 'missao-aprovacao-v1:<uid>', e só o lê ao montar. O jogo também valida
+// esse estado com rigor (XP == soma dos acertos), então nada é mesclado
+// campo a campo: o servidor guarda o snapshot inteiro e nunca aceita um
+// com menos XP (o XP do jogo só cresce). Ao carregar, se a nuvem estiver
+// à frente deste aparelho, ela é adotada — o estado local vai para
+// '<chave>:backup' antes — e a página recarrega para o jogo relê-la.
+// -----------------------------------------------------------------------
+
+const GAME_ROUTES = ['/jogar', '/redacao', '/missoes', '/ranking', '/dados'];
+let gameSync = null; // { key, lastUploaded }
+
+function snapshotXp(raw) {
+  try {
+    const xp = JSON.parse(raw)?.xp;
+    return Number.isSafeInteger(xp) ? xp : -1;
+  } catch (_) {
+    return -1;
+  }
+}
+
+function uploadGameSnapshot({ keepalive = false } = {}) {
+  if (!gameSync) return;
+  const current = localStorage.getItem(gameSync.key);
+  if (!current || current === gameSync.lastUploaded) return;
+  gameSync.lastUploaded = current;
+  authFetch('/api/data', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'save-game', state: current }),
+    keepalive,
+  })
+    .then((res) => res.json())
+    .then((payload) => { if (!payload?.success && gameSync) gameSync.lastUploaded = null; })
+    .catch(() => { if (gameSync) gameSync.lastUploaded = null; });
+}
+
+(async function startGameCloudSync() {
+  const user = getCurrentUser();
+  if (!isConfigured || !user || user.isGuest || !user.uid) return;
+  const key = `missao-aprovacao-v1:${user.uid}`;
+
+  let cloud;
+  try {
+    const payload = await callApiData('get-game', {}, 'GET');
+    if (!payload?.success) return; // sem sessão válida ou servidor fora — não sincroniza às cegas
+    cloud = payload.snapshot;
+  } catch (_) {
+    return;
+  }
+
+  const local = localStorage.getItem(key);
+  // Marca por XP: se o jogo recusar o snapshot adotado (e recomeçar do
+  // zero), a mesma nuvem não é readotada em loop nesta aba.
+  const restoredFlag = `tico_game_restored:${user.uid}`;
+  if (cloud && cloud.xp > snapshotXp(local) && cloud.state !== local
+      && sessionStorage.getItem(restoredFlag) !== String(cloud.xp)) {
+    if (local !== null) localStorage.setItem(`${key}:backup`, local);
+    localStorage.setItem(key, cloud.state);
+    sessionStorage.setItem(restoredFlag, String(cloud.xp));
+    if (GAME_ROUTES.some((route) => window.location.pathname.startsWith(route))) {
+      window.location.reload();
+      return;
+    }
+  }
+
+  gameSync = { key, lastUploaded: cloud?.state ?? null };
+  uploadGameSnapshot();
+  setInterval(uploadGameSnapshot, 20000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') uploadGameSnapshot({ keepalive: true });
+  });
 })();
 
 export default SupabaseApplet;
