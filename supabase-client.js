@@ -96,6 +96,18 @@ window.fetch = async function (input, init = {}) {
   const url = typeof input === 'string' ? input : input?.url || '';
   const method = (init?.method || 'GET').toUpperCase();
   if (url === '/api/redacao' && method === 'POST') {
+    // Rede de segurança: se o estado do jogo perdeu o tema (topicId vazio),
+    // usa o tema que está selecionado na tela — é o que a pessoa vê e
+    // sobre o qual escreveu. Sem tema o servidor recusa a correção (400).
+    if (typeof init.body === 'string') {
+      try {
+        const payload = JSON.parse(init.body);
+        const shownTopic = document.getElementById('essay-topic')?.value;
+        if (payload && !payload.topicId && shownTopic) {
+          init = { ...init, body: JSON.stringify({ ...payload, topicId: shownTopic }) };
+        }
+      } catch (_) {}
+    }
     const token = await getAccessToken();
     if (token) {
       init = { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } };

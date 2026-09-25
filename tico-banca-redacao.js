@@ -1536,8 +1536,15 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
     const currentTopicObj = BANCA_TOPICS.find(t => t.id === currentVal);
     const matchesCurrentBanca = currentTopicObj && (currentTopicObj.bank === currentSelectedBanca);
 
-    if (!matchesCurrentBanca && bancaSpecific.length > 0) {
-      const targetVal = bancaSpecific[0].id;
+    // Só troca para um tema da banca se ele EXISTIR no select do jogo. O
+    // select é controlado pelo React e só tem os temas dele: forçar um
+    // valor que não está na lista deixava o valor vazio, o jogo mandava
+    // topicId "" e o servidor recusava TODA correção (400).
+    const targetOption = bancaSpecific.length > 0
+      ? Array.from(topicSelect.options).find((o) => o.value === bancaSpecific[0].id)
+      : null;
+    if (!matchesCurrentBanca && targetOption) {
+      const targetVal = targetOption.value;
       if (topicSelect.value !== targetVal) {
         topicSelect.value = targetVal;
         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
@@ -1571,9 +1578,9 @@ Em suma, verifica-se que [tema] exige atenção contínua e integrada. Ao articu
     }
 
     banner.innerHTML = `
-      <div class="tico-topic-badge">${t.badge || currentSelectedBanca}</div>
+      <div class="tico-topic-badge">${t.bank === currentSelectedBanca ? (t.badge || currentSelectedBanca) : `Padrão ${currentSelectedBanca}`}</div>
       <div class="tico-topic-meta-tip">
-        <span>Banca: <strong>${t.bank}</strong></span>
+        <span>Banca: <strong>${currentSelectedBanca}</strong></span>
         <span>•</span>
         <span>Folha: <strong>30 Linhas</strong></span>
       </div>
