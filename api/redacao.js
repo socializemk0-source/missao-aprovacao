@@ -391,6 +391,21 @@ var json = (body, status = 200) => Response.json(body, {
 	headers: { "Cache-Control": "no-store" }
 });
 var counts = /* @__PURE__ */ new Map();
+// Registra o que a OpenAI respondeu num erro (status, tipo e mensagem) —
+// sem isso o log só dizia o nosso código, e não dava para saber a causa.
+async function logOpenAIError(result) {
+	let detail = null;
+	try {
+		const raw = await result.text();
+		try {
+			const error = JSON.parse(raw)?.error;
+			detail = error ? { type: error.type, code: error.code, message: String(error.message || "").slice(0, 300) } : raw.slice(0, 300);
+		} catch {
+			detail = raw.slice(0, 300);
+		}
+	} catch {}
+	console.warn("essay_correction_openai_error", { status: result.status, detail });
+}
 function failure(code, message, status = 502) {
 	console.warn("essay_correction", {
 		code,
@@ -558,14 +573,13 @@ async function handleEssay(request, env, uid, send = fetch) {
 			items: string
 		}
 	});
-	try {
-		const result = await send("https://api.openai.com/v1/responses", {
+	const callOpenAI = (timeoutMs = 5e4) => send("https://api.openai.com/v1/responses", {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${env.OPENAI_API_KEY}`,
 				"Content-Type": "application/json"
 			},
-			signal: AbortSignal.timeout(5e4),
+			signal: AbortSignal.timeout(timeoutMs),
 			body: JSON.stringify({
 				model: env.OPENAI_MODEL || "gpt-4.1-mini",
 				store: false,
@@ -586,12 +600,23 @@ async function handleEssay(request, env, uid, send = fetch) {
 				} }
 			})
 		});
+	try {
+		// Erro passageiro da OpenAI (5xx): uma nova tentativa, se ainda
+		// sobra tempo dentro do limite de 60s da função.
+		const startedAt = Date.now();
+		let result = await callOpenAI();
+		if (!result.ok && result.status >= 500 && Date.now() - startedAt < 2e4) {
+			await logOpenAIError(result);
+			await new Promise((resolve) => setTimeout(resolve, 1500));
+			result = await callOpenAI(5.2e4 - (Date.now() - startedAt));
+		}
 		if (!result.ok) {
+			await logOpenAIError(result);
 			if (result.status === 401) return failure("IA_CHAVE_INVALIDA", "A OpenAI não aceitou a chave configurada no servidor. O responsável precisa conferir a chave da API.");
 			if (result.status === 403) return failure("IA_SEM_PERMISSAO", "A configuração da API não tem permissão para esta solicitação.");
 			if (result.status === 429) return failure("IA_LIMITE_API", "A API atingiu um limite de uso ou de saldo. O responsável precisa conferir o painel da API.");
 			if (result.status === 400 || result.status === 404) return failure("IA_CONFIGURACAO", "A OpenAI não aceitou a configuração da solicitação. Confira o modelo e a integração no servidor.");
-			return failure("IA_SERVICO_INDISPONIVEL", "O serviço de correção está temporariamente indisponível.");
+			return failure("IA_SERVICO_INDISPONIVEL", `O serviço de correção está temporariamente indisponível (OpenAI respondeu ${result.status}).`);
 		}
 		const data = await result.json();
 		if (data.status !== "completed") return failure(data.incomplete_details?.reason === "max_output_tokens" ? "IA_LIMITE_RESPOSTA" : "IA_RESPOSTA_INCOMPLETA", "A IA não concluiu a avaliação. Nenhuma nota parcial foi registrada.");

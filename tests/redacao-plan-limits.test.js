@@ -221,3 +221,44 @@ test('GET /api/redacao (consulta de bancas/temas) continua público, sem exigir 
   const body = JSON.parse(res.body);
   assert.equal(body.enabled, true);
 });
+
+// Falha passageira da OpenAI (5xx): tenta mais uma vez antes de desistir,
+// e quando desiste diz qual status a OpenAI devolveu (antes só aparecia
+// IA_SERVICO_INDISPONIVEL, sem como saber a causa).
+function postEssayWith(uid, responses) {
+  ipCounter += 1;
+  let call = 0;
+  const send = mock.fn(async () => {
+    const r = responses[Math.min(call++, responses.length - 1)];
+    return r === 'ok' ? fakeOpenAiResponse() : { ok: false, status: r, json: async () => ({ error: { message: `falha ${r}`, type: 'server_error' } }), text: async () => JSON.stringify({ error: { message: `falha ${r}`, type: 'server_error' } }) };
+  });
+  const req = makeReq({
+    method: 'POST',
+    body: { topicId: TOPIC_ID, bank: BANK, text: STUDENT_TEXT },
+    headers: { 'content-type': 'application/json', authorization: `Bearer TEST:${uid}`, 'x-forwarded-for': `198.51.100.${ipCounter}` },
+  });
+  const res = makeRes();
+  return redacaoHandler(req, res, { send }).then(() => ({ res, body: JSON.parse(res.body), send }));
+}
+
+test('OpenAI com erro 503 uma vez: tenta de novo e a correção sai', async () => {
+  const { res, send } = await postEssayWith('user_A', [503, 'ok']);
+  assert.equal(res.statusCode, 200);
+  assert.equal(send.mock.calls.length, 2);
+});
+
+test('OpenAI com 500 nas duas tentativas: 502 com o status da OpenAI na mensagem, e a vaga do grátis volta', async () => {
+  const { res, body, send } = await postEssayWith('user_A', [500, 500]);
+  assert.equal(res.statusCode, 502);
+  assert.equal(body.code, 'IA_SERVICO_INDISPONIVEL');
+  assert.match(body.error, /OpenAI respondeu 500/);
+  assert.equal(send.mock.calls.length, 2);
+  const retry = await postEssayWith('user_A', ['ok']);
+  assert.equal(retry.res.statusCode, 200, 'falha da IA não pode gastar a correção da semana');
+});
+
+test('erro de configuração (400) não é repetido', async () => {
+  const { body, send } = await postEssayWith('user_A', [400]);
+  assert.equal(body.code, 'IA_CONFIGURACAO');
+  assert.equal(send.mock.calls.length, 1);
+});
