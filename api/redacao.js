@@ -375,6 +375,77 @@ var wordCount = (text) => text.trim() ? text.trim().split(/\s+/u).length : 0;
 // de comparar, então o requisito "o trecho tem que existir de verdade no
 // texto do aluno" continua de pé.
 var normalizeWhitespaceForQuoteMatch = (s) => s.normalize("NFC").replace(/\s+/g, " ").trim();
+// A IA precisa citar trechos EXATOS do texto do aluno, mas às vezes troca
+// aspas/travessões, junta linhas, muda maiúscula ou corta com "...". Antes
+// isso derrubava a avaliação inteira (IA_TRECHO_DIVERGENTE) de forma
+// aleatória. Aqui cada trecho é localizado no texto com essa tolerância e
+// substituído pelo trecho EXATO do texto — o jogo confere com includes()
+// literal. Trecho que não existe no texto é descartado; o resto fica.
+var QUOTE_EQUIVALENTS = {
+	"\u201C": "\"", "\u201D": "\"", "\u201E": "\"", "\u00AB": "\"", "\u00BB": "\"",
+	"\u2018": "'", "\u2019": "'", "\u201A": "'",
+	"\u2013": "-", "\u2014": "-", "\u2010": "-", "\u2212": "-"
+};
+function foldForQuoteMatch(str) {
+	const chars = [];
+	const index = [];
+	let lastWasSpace = true;
+	for (let i = 0; i < str.length; i++) {
+		let ch = str[i];
+		if (/\s/.test(ch)) {
+			if (!lastWasSpace) {
+				chars.push(" ");
+				index.push(i);
+				lastWasSpace = true;
+			}
+			continue;
+		}
+		ch = QUOTE_EQUIVALENTS[ch] || ch;
+		const lower = ch.toLowerCase();
+		if (lower.length === 1) ch = lower;
+		chars.push(ch);
+		index.push(i);
+		lastWasSpace = false;
+	}
+	if (chars[chars.length - 1] === " ") {
+		chars.pop();
+		index.pop();
+	}
+	return { folded: chars.join(""), index };
+}
+function locateQuote(text, quote) {
+	// Mesma forma Unicode do texto (a IA às vezes devolve acentos decompostos).
+	const form = text === text.normalize("NFC") ? "NFC" : "NFD";
+	const withoutEllipsis = String(quote).normalize(form).trim().replace(/^(?:\.{3}|\u2026)\s*/, "").replace(/\s*(?:\.{3}|\u2026)$/, "");
+	const withoutQuoteMarks = withoutEllipsis.replace(/^["'\u201C\u201D\u2018\u2019\u00AB\u00BB]+|["'\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/g, "");
+	const haystack = foldForQuoteMatch(text);
+	for (const candidate of [withoutEllipsis, withoutQuoteMarks]) {
+		const needle = foldForQuoteMatch(candidate).folded;
+		if (needle.length < 4) continue;
+		const at = haystack.folded.indexOf(needle);
+		if (at >= 0) return text.slice(haystack.index[at], haystack.index[at + needle.length - 1] + 1);
+	}
+	return null;
+}
+function repairEssayReport(report, text) {
+	if (!report || typeof report !== "object") return report;
+	if (Array.isArray(report.annotations)) {
+		const before = report.annotations.length;
+		report.annotations = report.annotations.flatMap((a) => {
+			const exact = a && typeof a.quote === "string" ? locateQuote(text, a.quote) : null;
+			return exact && exact.length <= 1800 ? [{ ...a, quote: exact }] : [];
+		}).slice(0, 8);
+		if (report.annotations.length < before) console.warn("essay_correction_quotes_dropped", { dropped: before - report.annotations.length });
+	}
+	// Nota fora da faixa do critério (ex.: 21 de 20) é erro da IA: limita.
+	if (Array.isArray(report.criteria)) report.criteria = report.criteria.map((c) => {
+		const max = essayCriteria.find((x) => x.id === c?.id)?.max;
+		return max !== void 0 && Number.isInteger(c.score) ? { ...c, score: Math.min(Math.max(c.score, 0), max) } : c;
+	});
+	if (Array.isArray(report.strengths)) report.strengths = report.strengths.slice(0, 4);
+	if (Array.isArray(report.nextSteps)) report.nextSteps = report.nextSteps.slice(0, 4);
+	return report;
+}
 function validEssayReport(value, text) {
 	const r = value;
 	const str = (v) => typeof v === "string" && v.length > 0 && v.length <= 1800;
@@ -629,10 +700,8 @@ async function handleEssay(request, env, uid, send = fetch) {
 		} catch {
 			return failure("IA_JSON_INVALIDO", "A IA retornou uma avaliação em formato ilegível.");
 		}
-		if (!validEssayReport(report, body.text)) {
-			const normalizedText = normalizeWhitespaceForQuoteMatch(body.text);
-			return failure(Array.isArray(report?.annotations) && report.annotations.some((a) => typeof a?.quote === "string" && !normalizedText.includes(normalizeWhitespaceForQuoteMatch(a.quote))) ? "IA_TRECHO_DIVERGENTE" : "IA_AVALIACAO_INVALIDA", "A avaliação não passou pela conferência de notas, critérios ou trechos citados. Nenhuma nota foi registrada.");
-		}
+		report = repairEssayReport(report, body.text);
+		if (!validEssayReport(report, body.text)) return failure("IA_AVALIACAO_INVALIDA", "A avaliação não passou pela conferência de notas e critérios. Nenhuma nota foi registrada.");
 		delivered = true;
 		// Gravado ANTES de responder: numa função serverless, uma promise
 		// solta pode ser congelada/descartada assim que a resposta sai. Uma

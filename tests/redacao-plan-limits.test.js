@@ -262,3 +262,94 @@ test('erro de configuração (400) não é repetido', async () => {
   assert.equal(body.code, 'IA_CONFIGURACAO');
   assert.equal(send.mock.calls.length, 1);
 });
+
+// A IA precisa copiar trechos EXATOS do texto nas anotações. Ela às vezes
+// troca aspas/traços, quebra de linha ou corta o trecho com "..." — antes
+// isso derrubava a avaliação inteira (IA_TRECHO_DIVERGENTE), de forma
+// aleatória. Agora cada trecho é localizado no texto do aluno com
+// tolerância e devolvido EXATAMENTE como está no texto (o jogo confere com
+// includes() literal); só um trecho que não existe é descartado.
+const TEXT_WITH_QUOTES = 'O "governo digital" precisa incluir todos — inclusive idosos.\nSem isso, a exclusão cresce. ' + STUDENT_TEXT;
+
+function aiWithAnnotations(annotations, extra = {}) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: 'completed',
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        summary: 'Resumo.',
+        criteria: [
+          { id: 'tema', score: 15, reason: 'ok' },
+          { id: 'argumentos', score: 20, reason: 'ok' },
+          { id: 'organizacao', score: 15, reason: 'ok' },
+          { id: 'linguagem', score: 25, reason: 'ok' },
+        ],
+        annotations,
+        strengths: ['Bom.'],
+        nextSteps: ['Revisar.'],
+        ...extra,
+      }) }] }],
+    }),
+  };
+}
+
+async function postWithAi(uid, aiResponse, text = TEXT_WITH_QUOTES) {
+  ipCounter += 1;
+  const send = mock.fn(async () => aiResponse);
+  const req = makeReq({
+    method: 'POST',
+    body: { topicId: TOPIC_ID, bank: BANK, text },
+    headers: { 'content-type': 'application/json', authorization: `Bearer TEST:${uid}`, 'x-forwarded-for': `198.51.100.${ipCounter}` },
+  });
+  const res = makeRes();
+  await redacaoHandler(req, res, { send });
+  return { res, body: JSON.parse(res.body) };
+}
+
+const note = (quote) => ({ quote, issue: 'Problema.', suggestion: 'Sugestão.' });
+
+test('trecho com aspas/travessão trocados, quebra de linha e maiúsculas diferentes é aceito e volta EXATO', async () => {
+  const { res, body } = await postWithAi('user_A', aiWithAnnotations([
+    note('o “governo digital” precisa incluir todos - inclusive idosos. Sem isso'),
+  ]));
+  assert.equal(res.statusCode, 200, JSON.stringify(body));
+  assert.equal(body.report.annotations.length, 1);
+  const quote = body.report.annotations[0].quote;
+  assert.ok(TEXT_WITH_QUOTES.includes(quote), `o trecho devolvido precisa existir literalmente no texto: ${quote}`);
+  assert.equal(quote, 'O "governo digital" precisa incluir todos — inclusive idosos.\nSem isso');
+});
+
+test('trecho cortado com reticências é localizado', async () => {
+  const { res, body } = await postWithAi('user_A', aiWithAnnotations([note('...precisa incluir todos — inclusive idosos…')]));
+  assert.equal(res.statusCode, 200);
+  assert.equal(body.report.annotations[0].quote, 'precisa incluir todos — inclusive idosos');
+});
+
+test('trecho inventado é descartado, mas a avaliação (notas) continua valendo', async () => {
+  const { res, body } = await postWithAi('user_A', aiWithAnnotations([
+    note('Esta frase não existe no texto do aluno.'),
+    note('Sem isso, a exclusão cresce.'),
+  ]));
+  assert.equal(res.statusCode, 200, JSON.stringify(body));
+  assert.deepEqual(body.report.annotations.map((a) => a.quote), ['Sem isso, a exclusão cresce.']);
+  assert.equal(body.report.criteria.reduce((s, c) => s + c.score, 0), 75);
+});
+
+test('listas acima do limite são cortadas em vez de derrubar a avaliação', async () => {
+  const many = Array.from({ length: 6 }, (_, i) => `Ponto ${i}.`);
+  const { res, body } = await postWithAi('user_A', aiWithAnnotations([], { strengths: many, nextSteps: many }));
+  assert.equal(res.statusCode, 200, JSON.stringify(body));
+  assert.equal(body.report.strengths.length, 4);
+  assert.equal(body.report.nextSteps.length, 4);
+});
+
+test('nota acima do máximo do critério é limitada ao máximo em vez de derrubar a avaliação', async () => {
+  const ai = aiWithAnnotations([]);
+  const original = await ai.json();
+  const report = JSON.parse(original.output[0].content[0].text);
+  report.criteria[0].score = 999; // tema vale no máximo 20
+  const { res, body } = await postWithAi('user_A', { ok: true, status: 200, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify(report) }] }] }) });
+  assert.equal(res.statusCode, 200, JSON.stringify(body));
+  assert.equal(body.report.criteria.find((c) => c.id === 'tema').score, 20);
+});
