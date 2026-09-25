@@ -37,13 +37,20 @@
   // quando a primeira chamada autenticada lá dentro desse 401. Chamada
   // direta em window.supabase (nunca de dentro de um onAuthStateChange:
   // supabase-client.js já evita isso na hidratação — ver hydrateSessionUser).
-  function cachedSessionStillValid() {
-    if (!window.supabase || typeof window.supabase.auth?.getSession !== 'function') {
-      return Promise.resolve(false);
+  //
+  // supabase-client.js é um módulo que ainda busca a própria configuração
+  // antes de criar o client — neste ponto ele quase sempre ainda não está
+  // pronto. Antes, "ainda não carregou" era tratado como "sessão inválida":
+  // o cache era apagado e quem estava logado via o formulário de novo.
+  // Agora espera o client ficar pronto (até ~6s) antes de decidir.
+  async function cachedSessionStillValid() {
+    for (let i = 0; i < 30 && typeof window.supabase?.auth?.getSession !== 'function'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
+    if (typeof window.supabase?.auth?.getSession !== 'function') return null; // não deu pra saber
     return window.supabase.auth.getSession()
       .then(({ data }) => Boolean(data?.session?.user))
-      .catch(() => false);
+      .catch(() => null);
   }
 
   function enhance(card) {
@@ -59,12 +66,18 @@
     try {
       currentUser = JSON.parse(localStorage.getItem('missao_aprovacao_auth_user') || 'null');
     } catch (_) {}
-    if (currentUser && !currentUser.isGuest) {
+    if (currentUser && !currentUser.isGuest && !isPasswordRecoveryReturn()) {
       card.dataset.ticoAccountChecking = 'true';
       cachedSessionStillValid().then((valid) => {
         delete card.dataset.ticoAccountChecking;
         if (valid) {
           window.location.href = '/jogar';
+          return;
+        }
+        // Não deu pra confirmar (client não carregou): mostra o formulário,
+        // mas sem apagar o login de quem pode estar logado.
+        if (valid === null) {
+          buildForm(card);
           return;
         }
         // Sessão em cache não é mais válida — não redireciona às cegas.
@@ -85,8 +98,11 @@
   // traz a pessoa de volta pra /entrar com um token de recuperação no
   // FRAGMENTO da URL (#access_token=...&type=recovery...) — checável na
   // hora, sem depender de nenhum módulo assíncrono ainda estar pronto.
+  // Guardado assim que o script carrega: o Supabase limpa o fragmento da
+  // URL depois de ler o token.
+  const RECOVERY_RETURN = window.location.hash.includes('type=recovery');
   function isPasswordRecoveryReturn() {
-    return window.location.hash.includes('type=recovery');
+    return RECOVERY_RETURN || window.location.hash.includes('type=recovery');
   }
 
   function buildRecoveryForm(card, notice, fieldset) {
