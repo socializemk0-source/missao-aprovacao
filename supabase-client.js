@@ -5,6 +5,11 @@
 // em uid/userId enviado pelo cliente.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+// Lido antes de qualquer await: o Supabase limpa o fragmento da URL depois
+// de ler o token, e a volta do "Esqueci minha senha" também chega com uma
+// sessão — nesse caso a pessoa tem que ficar em /entrar para trocar a senha.
+const PASSWORD_RECOVERY_RETURN = window.location.hash.includes('type=recovery');
+
 const SUPABASE_CONFIG = {
   url: window.__SUPABASE_URL__ || '',
   anonKey: window.__SUPABASE_ANON_KEY__ || '',
@@ -745,14 +750,30 @@ if (typeof window !== 'undefined') {
 // no Supabase mas o app nunca chega a perceber (subscribeAuth só é
 // escutado por quem chama, e a landing page não chama). Roda uma vez, sem
 // depender de nenhum componente pedir isso.
+//
+// O cache local só vale se for DESTA sessão: um convidado de antes (ou
+// outra conta) não pode esconder o login novo. E quem tem sessão e cai na
+// página inicial, em /entrar ou em /cadastro vai direto para o jogo.
+const ENTRY_ROUTES = ['/', '/entrar', '/cadastro'];
 (async function hydrateFreshSessionOnLoad() {
   try {
-    if (getCurrentUser()) return; // já tem cache local — nada a fazer aqui
     const { data } = await supabase.auth.getSession();
-    if (!data?.session?.user) return;
-    const user = await hydrateSessionUser(data.session);
-    if (user && window.location.pathname === '/') {
-      window.location.href = '/jogar';
+    const sessionUser = data?.session?.user;
+    if (!sessionUser) return;
+
+    const cached = getCurrentUser();
+    const cacheMatches = cached && !cached.isGuest && cached.uid === sessionUser.id;
+    let user = cacheMatches ? cached : null;
+    // O primeiro acesso depois do redirecionamento do Google costuma pegar
+    // a função da Vercel "fria": tenta de novo antes de desistir.
+    for (let attempt = 0; !user && attempt < 3; attempt++) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      user = await hydrateSessionUser(data.session);
+    }
+
+    const path = window.location.pathname.replace(/\/+$/, '') || '/';
+    if (user && !PASSWORD_RECOVERY_RETURN && ENTRY_ROUTES.includes(path)) {
+      window.location.replace('/jogar');
     }
   } catch (_) {
     // Sem sessão válida ainda (ou servidor indisponível) — segue normal.
