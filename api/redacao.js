@@ -1,5 +1,6 @@
 import { requireAuth } from "../middleware/requireAuth.js";
 import { getUserByUid, saveEssay, reserveEssayQuota, completeEssayReservation, releaseEssayReservation } from "../src/db/queries.js";
+import { isProActive } from "../src/plan.js";
 
 // Limite semanal de correções por IA do Plano Grátis (o PRO não tem limite
 // — ver PLAN_CONFIG.freeFeatures/proFeatures.redacao em public/tico-plans.js).
@@ -481,7 +482,7 @@ async function handleEssay(request, env, uid, send = fetch) {
 	let userPlan = "free";
 	try {
 		const userRecord = await getUserByUid(uid);
-		userPlan = userRecord?.plan === "pro" ? "pro" : "free";
+		userPlan = isProActive(userRecord) ? "pro" : "free"; // passe vencido não conta
 	} catch {
 		return json({ code: "LIMITE_INDISPONIVEL", error: "Não foi possível confirmar seu plano agora. Seu texto continua salvo. Tente novamente em instantes." }, 503);
 	}

@@ -1,7 +1,7 @@
 // src/db/queries.js
 import { db } from './index.js';
 import { users, leaderboard, userProgress, essays, dailyMissions, profiles, viewedTips, subscriptions, subscriptionPayments, gameSnapshots } from './schema.js';
-import { eq, desc, and, gte, sql } from 'drizzle-orm';
+import { eq, ne, desc, and, gte, sql } from 'drizzle-orm';
 
 // Helper: Obter ou criar usuário.
 //
@@ -490,7 +490,7 @@ export async function getViewedTipsByUserId(userId) {
   }
 }
 
-// Buscar assinatura atual do usuário (estado local da assinatura na AbacatePay)
+// Buscar assinatura atual do usuário (estado local da assinatura no Mercado Pago)
 export async function getSubscriptionByUserId(userId) {
   try {
     const res = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
@@ -554,6 +554,82 @@ export async function upsertSubscription(data) {
     return result[0];
   } catch (error) {
     console.error('Database query upsertSubscription failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Passe PRO (PIX avulso): registra o pagamento e soma os dias ao que resta
+// numa transação só. O pagamento é a chave de idempotência (providerPaymentId
+// único): um webhook reenviado cai no ON CONFLICT e não soma de novo. A soma
+// é feita no próprio UPDATE, então dois pagamentos simultâneos do mesmo
+// usuário se acumulam em vez de um sobrescrever o outro.
+export async function grantProPass({ userId, paymentId, days, amount, label }) {
+  try {
+    return await db.transaction(async (tx) => {
+      const inserted = await tx.insert(subscriptionPayments)
+        .values({
+          providerPaymentId: paymentId,
+          providerSubscriptionId: paymentId,
+          userId,
+          status: 'paid',
+          amount: amount !== undefined ? String(amount) : null,
+          currency: 'BRL',
+          updatedAt: new Date(),
+        })
+        .onConflictDoNothing({ target: subscriptionPayments.providerPaymentId })
+        .returning();
+      if (inserted.length === 0) return { status: 'duplicate' };
+
+      const [user] = await tx.update(users)
+        .set({
+          plan: 'pro',
+          planPrice: label,
+          proUntil: sql`greatest(coalesce(${users.proUntil}, now()), now()) + make_interval(days => ${days}::int)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.uid, userId))
+        .returning();
+      // Sem usuário, desfaz tudo: o pagamento não pode ficar marcado como
+      // processado sem ter dado o PRO (o 5xx faz o Mercado Pago reenviar).
+      if (!user) throw new Error(`usuário ${userId} não encontrado para o passe`);
+      return { status: 'granted', user };
+    });
+  } catch (error) {
+    console.error('Database query grantProPass failed:', error);
+    throw new Error('Database query failed. Please try again later.', { cause: error });
+  }
+}
+
+// Estorno de um passe: tira os dias daquele pagamento (uma vez só) e volta
+// para o grátis se não sobrar validade.
+export async function revokeProPass({ userId, paymentId, days }) {
+  try {
+    return await db.transaction(async (tx) => {
+      const refunded = await tx.update(subscriptionPayments)
+        .set({ status: 'refunded', updatedAt: new Date() })
+        .where(and(
+          eq(subscriptionPayments.providerPaymentId, paymentId),
+          eq(subscriptionPayments.userId, userId),
+          ne(subscriptionPayments.status, 'refunded'),
+        ))
+        .returning();
+      if (refunded.length === 0) return { status: 'not_found' };
+
+      const [shortened] = await tx.update(users)
+        .set({ proUntil: sql`${users.proUntil} - make_interval(days => ${days}::int)`, updatedAt: new Date() })
+        .where(eq(users.uid, userId))
+        .returning();
+      if (shortened && shortened.proUntil && new Date(shortened.proUntil).getTime() > Date.now()) {
+        return { status: 'revoked', user: shortened };
+      }
+      const [freed] = await tx.update(users)
+        .set({ plan: 'free', proUntil: null, updatedAt: new Date() })
+        .where(eq(users.uid, userId))
+        .returning();
+      return { status: 'revoked', user: freed };
+    });
+  } catch (error) {
+    console.error('Database query revokeProPass failed:', error);
     throw new Error('Database query failed. Please try again later.', { cause: error });
   }
 }

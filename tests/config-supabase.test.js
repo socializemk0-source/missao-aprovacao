@@ -44,3 +44,17 @@ test('GET /api/config/supabase responde 503 (nunca finge sucesso) quando a confi
   process.env.SUPABASE_URL = originalUrl;
   process.env.SUPABASE_ANON_KEY = originalKey;
 });
+
+test('GET /api/config/billing informa o modo de cobrança (passe por padrão, assinatura com MERCADOPAGO_BILLING_MODE=subscription)', async () => {
+  const { default: billingConfigHandler } = await import('../api/config/billing.js');
+  delete process.env.MERCADOPAGO_BILLING_MODE;
+  let res = makeRes();
+  billingConfigHandler(makeReq({ method: 'GET' }), res);
+  assert.equal(res.body.mode, 'pass');
+
+  process.env.MERCADOPAGO_BILLING_MODE = 'subscription';
+  res = makeRes();
+  billingConfigHandler(makeReq({ method: 'GET' }), res);
+  assert.equal(res.body.mode, 'subscription');
+  delete process.env.MERCADOPAGO_BILLING_MODE;
+});

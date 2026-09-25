@@ -1,5 +1,7 @@
 import { requireAuth } from '../middleware/requireAuth.js';
-import { createAbacatePayClient } from '../src/payments/abacatepay.js';
+import { createMercadoPagoClient } from '../src/payments/mercadopago.js';
+import { futureDate } from '../src/payments/sync.js';
+import { isProActive } from '../src/plan.js';
 import {
   getOrCreateUser,
   getUserByUid,
@@ -131,17 +133,14 @@ export default async function authHandler(req, res, deps = {}) {
     // ------------------------------------------------------------------------
     // DOWNGRADE PARA O PLANO GRÁTIS (autosserviço, sempre a própria conta)
     //
-    // Virar PRO NUNCA passa mais por aqui: só o webhook da AbacatePay
-    // (api/payments/webhook.js), depois de confirmar um pagamento de
-    // verdade (assinatura HMAC + segredo), pode setar plan='pro'. Isso
-    // fecha o HIGH-1 da auditoria (qualquer usuário logado conseguia
-    // se autopromover a PRO sem pagar nada).
+    // Virar PRO NUNCA passa por aqui: só um pagamento confirmado na API do
+    // Mercado Pago (webhook ou /api/payments/confirm) seta plan='pro'.
     //
-    // O Plano PRO é uma assinatura RECORRENTE (R$ 29,90/mês) — por isso,
-    // se o usuário tiver uma assinatura ativa, o downgrade precisa
-    // CANCELAR ela de verdade na AbacatePay primeiro. Sem isso, o
-    // usuário "vira grátis" só no nosso banco, mas continua sendo
-    // cobrado todo mês.
+    // Com assinatura recorrente, o downgrade CANCELA ela de verdade no
+    // Mercado Pago primeiro (senão o aluno "vira grátis" só no nosso banco
+    // e continua sendo cobrado) — inclusive uma que está tentando cobrar de
+    // novo depois de uma falha, ou um link ainda pendente. O período já
+    // pago continua valendo até a data da próxima cobrança.
     // ------------------------------------------------------------------------
     if (action === 'upgrade-plan' || action === 'downgrade-to-free') {
       if (!(await runRequireAuth(req, res))) return;
@@ -149,34 +148,57 @@ export default async function authHandler(req, res, deps = {}) {
       const { plan } = body;
       if (plan === 'pro') {
         return res.status(403).json({
-          error: 'A ativação do Plano PRO só é confirmada após uma assinatura aprovada. Use o checkout de pagamento.',
+          error: 'A ativação do Plano PRO só é confirmada após um pagamento aprovado. Use o checkout de pagamento.',
         });
       }
 
       const targetUid = req.user.uid;
-
       const subscription = await getSubscriptionByUserId(targetUid);
-      if (subscription?.providerSubscriptionId && subscription.status === 'active') {
+      const userBefore = await getUserByUid(targetUid);
+      const cancellable = Boolean(subscription?.providerSubscriptionId)
+        && ['active', 'payment_failed', 'pending'].includes(subscription.status);
+
+      // Passe (ou assinatura já cancelada no período final): não há nada
+      // a cancelar, e tirar o PRO aqui só jogaria fora tempo já pago.
+      if (!cancellable && userBefore?.proUntil && isProActive(userBefore)) {
+        return res.status(409).json({
+          error: `Seu PRO não tem renovação automática: ele termina sozinho em ${new Date(userBefore.proUntil).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`,
+        });
+      }
+
+      let periodEnd = null;
+      if (cancellable) {
+        let cancelled = null;
         try {
-          const client = deps.abacatePayClient || createAbacatePayClient();
-          await client.cancelSubscription(subscription.providerSubscriptionId);
-          await upsertSubscription({
-            userId: targetUid,
-            providerCustomerId: subscription.providerCustomerId,
-            providerSubscriptionId: subscription.providerSubscriptionId,
-            status: 'cancelled',
-          });
+          const client = deps.mercadoPagoClient || createMercadoPagoClient();
+          cancelled = await client.cancelPreapproval(subscription.providerSubscriptionId);
         } catch (err) {
-          console.error('[Auth Server] Falha ao cancelar assinatura na AbacatePay:', err.message);
-          return res.status(502).json({
-            error: 'Não foi possível cancelar sua assinatura agora. Tente novamente em instantes.',
-          });
+          // Link pendente que não deu para cancelar, ou assinatura que não
+          // existe mais no Mercado Pago: não há cobrança a impedir.
+          if (subscription.status !== 'pending' && err.status !== 404) {
+            console.error('[Auth Server] Falha ao cancelar assinatura no Mercado Pago:', err.message);
+            return res.status(502).json({
+              error: 'Não foi possível cancelar sua assinatura agora. Tente novamente em instantes.',
+            });
+          }
+          console.warn('[Auth Server] Assinatura não cancelada no Mercado Pago (seguindo):', err.message);
+        }
+        await upsertSubscription({
+          userId: targetUid,
+          providerSubscriptionId: subscription.providerSubscriptionId,
+          status: 'cancelled',
+        });
+        if (subscription.status === 'active' && userBefore?.plan === 'pro' && !userBefore.proUntil) {
+          periodEnd = futureDate(cancelled?.next_payment_date) || futureDate(subscription.nextPaymentDate);
         }
       }
 
-      await updateUser(targetUid, { plan: 'free' });
-
-      const currentUser = await getUserByUid(targetUid);
+      // Passe que ainda vale (ex.: cancelou só um link pendente): fica como está.
+      if (!periodEnd && userBefore?.proUntil && isProActive(userBefore)) {
+        periodEnd = new Date(userBefore.proUntil);
+      }
+      const currentUser = await updateUser(targetUid, periodEnd ? { proUntil: periodEnd } : { plan: 'free', proUntil: null });
+      const finalPlan = periodEnd ? 'pro' : 'free';
       if (currentUser) {
         await syncLeaderboardEntry({
           userId: targetUid,
@@ -186,8 +208,20 @@ export default async function authHandler(req, res, deps = {}) {
           questionsAnswered: 0,
           streak: currentUser.streak || 1,
           xp: currentUser.xp || 0,
-          plan: 'free',
+          plan: finalPlan,
         }).catch(() => {});
+      }
+
+      if (periodEnd) {
+        const until = periodEnd.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        console.log(`[Auth Server] Assinatura do aluno ${targetUid} cancelada — PRO até ${periodEnd.toISOString()}.`);
+        return res.status(200).json({
+          success: true,
+          plan: 'pro',
+          planPrice: currentUser?.planPrice,
+          proUntil: periodEnd.toISOString(),
+          message: `Assinatura cancelada. Você não será mais cobrado, e seu PRO continua até ${until}.`,
+        });
       }
 
       console.log(`[Auth Server] Plano do aluno ${targetUid} revertido para o modo gratuito.`);
@@ -195,6 +229,7 @@ export default async function authHandler(req, res, deps = {}) {
         success: true,
         plan: 'free',
         planPrice: 'R$ 29,90',
+        proUntil: null,
         message: 'Plano atualizado para o modo gratuito.',
       });
     }
@@ -244,6 +279,12 @@ export default async function authHandler(req, res, deps = {}) {
           targetExam: 'Concursos Públicos',
           preferredBanca: 'Cebraspe',
         }).catch(() => profileRecord);
+      }
+
+      // Passe PRO vencido: volta para o grátis aqui mesmo (é a leitura de
+      // perfil que todo carregamento do app faz), sem depender de rotina agendada.
+      if (userRecord?.plan === 'pro' && !isProActive(userRecord)) {
+        userRecord = (await updateUser(req.user.uid, { plan: 'free', proUntil: null })) || { ...userRecord, plan: 'free', proUntil: null };
       }
 
       if (userRecord) delete userRecord.passwordHash;

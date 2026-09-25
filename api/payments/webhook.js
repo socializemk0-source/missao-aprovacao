@@ -1,199 +1,93 @@
-import { verifyWebhookSignature, verifyWebhookSecret } from '../../src/payments/abacatepay.js';
-import {
-  updateUser,
-  syncLeaderboardEntry,
-  getSubscriptionByProviderSubscriptionId,
-  getSubscriptionByProviderCustomerId,
-  getSubscriptionByUserId,
-  upsertSubscription,
-  getSubscriptionPaymentByProviderPaymentId,
-  recordSubscriptionPayment,
-} from '../../src/db/queries.js';
+import { createMercadoPagoClient, verifyWebhookSignature } from '../../src/payments/mercadopago.js';
+import { applyPassPayment, applyPreapproval, applyAuthorizedPayment } from '../../src/payments/sync.js';
+import { readBody } from '../../src/payments/http.js';
 
-// Rótulo exibido no perfil, a partir do que a AbacatePay de fato cobrou
-// (valor em centavos + frequência da assinatura). Ex.: "R$ 239,90/ano".
-function planPriceLabel(subscription) {
-  const cents = Number.isFinite(subscription?.amount) ? subscription.amount : 2990;
-  const value = (cents / 100).toFixed(2).replace('.', ',');
-  const period = subscription?.frequency === 'ANNUALLY' ? '/ano' : '/mês';
-  return `R$ ${value}${period}`;
-}
-
-// Lê o corpo BRUTO da requisição — a assinatura HMAC da AbacatePay é sobre
-// os bytes exatos recebidos, não sobre um JSON re-serializado (que pode
-// ter espaços/ordem de chaves diferentes e invalidar a assinatura). No
-// Express (server.js), server.js grava isso em req.rawBody via a opção
-// `verify` do express.json(); na Vercel (sem parsing automático), lemos o
-// stream da requisição diretamente.
-async function getRawBody(req) {
-  if (req.rawBody) return req.rawBody.toString('utf8');
-  let raw = '';
-  for await (const chunk of req) raw += chunk;
-  return raw;
-}
-
-// O evento não repete de forma confiável o uid do nosso usuário — tenta,
-// em ordem, todo campo plausível que a AbacatePay pode usar para
-// identificar a assinatura/customer, sempre contra dados que NÓS mesmos
-// gravamos ao criar o checkout (nunca confiando em algo vindo só do corpo).
-async function resolveSubscriptionRow(data) {
-  // subscription.id (subs_...) é o id definitivo; checkout.id (bill_...) é
-  // o que gravamos ao criar o checkout, antes do primeiro webhook.
-  for (const id of [data?.subscription?.id, data?.checkout?.id]) {
-    if (!id) continue;
-    const byId = await getSubscriptionByProviderSubscriptionId(id);
-    if (byId) return byId;
-  }
-
-  const customerId = data?.customer?.id || data?.subscription?.customerId || data?.customerId;
-  if (customerId) {
-    const byCustomerId = await getSubscriptionByProviderCustomerId(customerId);
-    if (byCustomerId) return byCustomerId;
-  }
-
-  const externalId = data?.subscription?.externalId || data?.checkout?.externalId || data?.payment?.externalId || data?.externalId;
-  if (externalId) {
-    const byUserId = await getSubscriptionByUserId(externalId);
-    if (byUserId) return byUserId;
-  }
-
-  return null;
-}
-
-async function setPlan(userId, plan, priceLabel) {
-  const updated = await updateUser(userId, plan === 'pro' ? { plan: 'pro', planPrice: priceLabel } : { plan: 'free' });
-  if (updated) {
-    await syncLeaderboardEntry({
-      userId,
-      name: updated.name,
-      targetExam: updated.targetExam || 'Polícia Federal',
-      city: updated.city || 'Brasil',
-      questionsAnswered: 0,
-      streak: updated.streak || 1,
-      xp: updated.xp || 0,
-      plan,
-    }).catch(() => {});
-  }
+function queryValue(query, key) {
+  const value = query?.[key];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 /**
- * POST /api/payments/webhook — arquivo próprio (em vez de um sub-caminho
- * despachado por req.path) para que a rota exista de verdade tanto atrás
- * do Express (server.js) quanto no roteamento por arquivo da Vercel.
+ * POST /api/payments/webhook — notificações do Mercado Pago (arquivo próprio
+ * para existir como rota tanto no Express quanto na Vercel).
  *
- * Webhook da AbacatePay: dois fatores de autenticidade, ambos obrigatórios
- * (fail-closed se qualquer um estiver ausente ou não configurado):
- *  - ?webhookSecret= na query string, igual ao cadastrado no painel deles;
- *  - X-Webhook-Signature: HMAC-SHA256 do corpo bruto com a chave pública
- *    da AbacatePay.
+ * Duas camadas:
+ *  1. x-signature (HMAC com a "assinatura secreta" do painel do Mercado
+ *     Pago, MERCADOPAGO_WEBHOOK_SECRET) — fail-closed sem o segredo;
+ *  2. o recurso é SEMPRE re-consultado na API com o nosso token; o estado
+ *     aplicado é o que a API diz, não o que veio na notificação.
  *
- * Eventos de assinatura tratados: subscription.completed/renewed (libera o
- * PRO), subscription.payment_failed (só registra, não revoga — a própria
- * AbacatePay cancela automaticamente após esgotar as tentativas) e
- * subscription.cancelled (revoga o PRO).
+ * Tópicos: payment (passe PRO), subscription_preapproval (assinatura) e
+ * subscription_authorized_payment (cada cobrança da assinatura).
  */
 export default async function webhookHandler(req, res, deps = {}) {
-  const webhookSecret = process.env.ABACATEPAY_WEBHOOK_SECRET;
-  const publicKey = process.env.ABACATEPAY_WEBHOOK_PUBLIC_KEY;
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Método não permitido.' });
+  }
 
-  if (!webhookSecret || !publicKey) {
-    console.error('[Payments Webhook] ABACATEPAY_WEBHOOK_SECRET/ABACATEPAY_WEBHOOK_PUBLIC_KEY não configurados — recusando notificação (fail-closed).');
+  const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error('[Payments Webhook] MERCADOPAGO_WEBHOOK_SECRET não configurado — recusando notificação (fail-closed).');
     return res.status(401).json({ error: 'Webhook não configurado.' });
   }
 
-  if (!verifyWebhookSecret({ receivedSecret: req.query?.webhookSecret, expectedSecret: webhookSecret })) {
-    console.warn('[Payments Webhook] Segredo da query string inválido ou ausente — notificação rejeitada.');
-    return res.status(401).json({ error: 'Segredo inválido.' });
+  const body = (await readBody(req)) || {};
+  const query = req.query || {};
+
+  // Formato antigo (IPN: ?topic=...&id=...) não é assinado. Tudo o que ele
+  // avisaria também chega no formato novo, então só confirmamos o recebimento.
+  const type = queryValue(query, 'type') || body.type;
+  if (!type && queryValue(query, 'topic')) {
+    return res.status(200).json({ success: true, ignored: true });
   }
 
-  const rawBody = deps.rawBody || await getRawBody(req);
-  const signatureHeader = req.headers['x-webhook-signature'];
-  if (!verifyWebhookSignature({ rawBody, signatureHeader, publicKey })) {
-    console.warn('[Payments Webhook] Assinatura HMAC inválida ou ausente — notificação rejeitada.');
+  const dataId = queryValue(query, 'data.id') ?? query.data?.id ?? body.data?.id;
+  if (!dataId) {
+    return res.status(400).json({ error: 'Notificação sem data.id.' });
+  }
+
+  const signatureOk = verifyWebhookSignature({
+    xSignature: req.headers['x-signature'],
+    xRequestId: req.headers['x-request-id'],
+    dataId: String(dataId),
+    secret,
+  });
+  if (!signatureOk) {
+    console.warn('[Payments Webhook] x-signature inválida ou ausente — notificação rejeitada.');
     return res.status(401).json({ error: 'Assinatura inválida.' });
   }
 
-  let payload;
+  let client;
   try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    return res.status(400).json({ error: 'Corpo da notificação não é um JSON válido.' });
+    client = deps.mercadoPagoClient || createMercadoPagoClient();
+  } catch (err) {
+    console.error('[Payments Webhook] Cliente do Mercado Pago não configurado:', err.message);
+    return res.status(500).json({ error: 'Pagamentos não configurados.' });
   }
 
-  const { event, data } = payload || {};
-
   try {
-    if (event === 'subscription.completed' || event === 'subscription.renewed') {
-      const row = await resolveSubscriptionRow(data);
-      if (!row) {
-        console.warn(`[Payments Webhook] ${event} sem assinatura local correspondente — verifique o payload:`, JSON.stringify(data));
-        return res.status(200).json({ success: true, ignored: true });
-      }
-
-      const subscriptionId = data?.subscription?.id || row.providerSubscriptionId;
-      await upsertSubscription({
-        userId: row.userId,
-        providerCustomerId: row.providerCustomerId,
-        providerSubscriptionId: subscriptionId,
-        status: 'active',
-        amount: data?.subscription?.amount !== undefined ? data.subscription.amount / 100 : undefined,
-        currency: data?.subscription?.currency,
-      });
-      await setPlan(row.userId, 'pro', planPriceLabel(data?.subscription));
-
-      const paymentId = data?.payment?.id;
-      if (paymentId) {
-        const already = await getSubscriptionPaymentByProviderPaymentId(String(paymentId));
-        if (!already) {
-          await recordSubscriptionPayment({
-            providerPaymentId: String(paymentId),
-            providerSubscriptionId: subscriptionId,
-            userId: row.userId,
-            status: data?.payment?.status,
-            amount: data?.payment?.paidAmount !== undefined ? data.payment.paidAmount / 100 : undefined,
-            currency: data?.subscription?.currency,
-          });
-        }
-      }
-
-      console.log(`[Payments] ${event} — assinatura ${subscriptionId}, usuário ${row.userId} promovido a PRO.`);
-      return res.status(200).json({ success: true });
+    let result;
+    if (type === 'payment') {
+      result = await applyPassPayment(await client.getPayment(dataId));
+    } else if (type === 'subscription_preapproval') {
+      result = await applyPreapproval(client, await client.getPreapproval(dataId));
+    } else if (type === 'subscription_authorized_payment') {
+      result = await applyAuthorizedPayment(client, await client.getAuthorizedPayment(dataId));
+    } else {
+      return res.status(200).json({ success: true, ignored: true });
     }
 
-    if (event === 'subscription.payment_failed') {
-      const row = await resolveSubscriptionRow(data);
-      if (!row) return res.status(200).json({ success: true, ignored: true });
-
-      await upsertSubscription({
-        userId: row.userId,
-        providerCustomerId: row.providerCustomerId,
-        providerSubscriptionId: row.providerSubscriptionId,
-        status: 'payment_failed',
-      });
-      console.warn(`[Payments] Cobrança falhou para o usuário ${row.userId} (tentativa ${data?.retryNumber ?? '?'}).`);
-      return res.status(200).json({ success: true });
-    }
-
-    if (event === 'subscription.cancelled') {
-      const row = await resolveSubscriptionRow(data);
-      if (!row) return res.status(200).json({ success: true, ignored: true });
-
-      await upsertSubscription({
-        userId: row.userId,
-        providerCustomerId: row.providerCustomerId,
-        providerSubscriptionId: row.providerSubscriptionId,
-        status: 'cancelled',
-      });
-      await setPlan(row.userId, 'free');
-      console.log(`[Payments] Assinatura cancelada (${data?.subscription?.cancelledDueTo || 'manual'}) — usuário ${row.userId} revertido para o modo gratuito.`);
-      return res.status(200).json({ success: true });
-    }
-
-    // Outros tópicos (trial_started, etc.) — confirma recebimento sem agir.
-    return res.status(200).json({ success: true, ignored: true });
+    console.log(`[Payments Webhook] ${type} ${dataId}: ${result.status}${result.userId ? ` (usuário ${result.userId})` : ''}.`);
+    return res.status(200).json({ success: true, result: result.status });
   } catch (err) {
+    // Recurso que não existe na nossa conta (ex.: o "simular notificação"
+    // do painel manda um id fictício): nada a fazer, e reenviar não ajuda.
+    if (err.status === 404) {
+      console.warn(`[Payments Webhook] ${type} ${dataId} não encontrado no Mercado Pago — ignorado.`);
+      return res.status(200).json({ success: true, ignored: true });
+    }
     console.error('[Payments Webhook] Erro ao processar notificação:', err.message);
-    // 5xx faz a AbacatePay reenviar depois — correto para falhas transitórias.
+    // 5xx faz o Mercado Pago reenviar depois — certo para falhas transitórias.
     return res.status(500).json({ error: 'Erro ao processar notificação.' });
   }
 }

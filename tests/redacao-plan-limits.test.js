@@ -196,6 +196,22 @@ test('Plano PRO: a correção também é gravada antes da resposta terminar', as
   assert.ok((store.essays.user_A || []).some((e) => e.feedback), 'correção do PRO também precisa estar persistida');
 });
 
+test('passe PRO vencido volta a valer o limite do Plano Grátis', async () => {
+  store.users.user_A.plan = 'pro';
+  store.users.user_A.proUntil = new Date(Date.now() - 60 * 1000); // venceu há 1 minuto
+  const first = await postEssay('user_A');
+  const second = await postEssay('user_A');
+  assert.equal(first.res.statusCode, 200);
+  assert.equal(second.res.statusCode, 403);
+});
+
+test('passe PRO dentro da validade continua ilimitado', async () => {
+  store.users.user_A.plan = 'pro';
+  store.users.user_A.proUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  assert.equal((await postEssay('user_A')).res.statusCode, 200);
+  assert.equal((await postEssay('user_A')).res.statusCode, 200);
+});
+
 test('GET /api/redacao (consulta de bancas/temas) continua público, sem exigir login', async () => {
   const req = makeReq({ method: 'GET', headers: {} });
   const res = makeRes();

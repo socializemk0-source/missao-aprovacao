@@ -372,10 +372,10 @@ export function subscribeAuth(callback) {
 // localStorage é só otimização de UX e nunca decide autorização real.
 // -----------------------------------------------------------------------
 
-// Só existe um jeito de virar PRO: pagar via AbacatePay. Cria a
-// preferência de checkout autenticada (o servidor usa req.user.uid — o
-// que a gente manda aqui não importa) e redireciona para lá. O plano só
-// muda de verdade quando o webhook confirmar o pagamento no servidor.
+// Só existe um jeito de virar PRO: pagar via Mercado Pago. Cria o
+// checkout autenticado (o servidor usa req.user.uid — o que a gente manda
+// aqui não importa) e redireciona para lá. O plano só muda de verdade
+// quando o servidor confirmar o pagamento na API do Mercado Pago.
 export async function startProCheckout(cycle = 'monthly') {
   const res = await authFetch('/api/payments', { method: 'POST', body: JSON.stringify({ cycle }) });
   const payload = await res.json().catch(() => ({}));
@@ -383,6 +383,17 @@ export async function startProCheckout(cycle = 'monthly') {
     throw new Error(payload.error || 'Não foi possível iniciar o pagamento. Tente novamente.');
   }
   window.location.href = payload.checkoutUrl;
+}
+
+// Na volta do checkout: pede ao servidor para conferir o pagamento direto
+// na API do Mercado Pago (sem esperar o webhook). O id vem da URL de
+// retorno, mas o servidor só aceita um pagamento do próprio usuário.
+export async function confirmProPayment({ paymentId, preapprovalId }) {
+  const res = await authFetch('/api/payments/confirm', {
+    method: 'POST',
+    body: JSON.stringify(paymentId ? { paymentId } : { preapprovalId }),
+  });
+  return res.json().catch(() => ({}));
 }
 
 // Busca o plano/perfil de verdade no servidor (nunca confia em
@@ -400,7 +411,7 @@ export async function refreshPlanFromServer() {
 
 export async function upgradeUserPlan(newPlan = 'pro', cycle = 'monthly') {
   if (newPlan === 'pro') {
-    return startProCheckout(cycle); // navega para a AbacatePay — não retorna
+    return startProCheckout(cycle); // navega para o Mercado Pago — não retorna
   }
 
   const res = await authFetch('/api/auth', {
@@ -413,11 +424,11 @@ export async function upgradeUserPlan(newPlan = 'pro', cycle = 'monthly') {
   }
 
   const current = getCurrentUser();
-  if (current) persistUser({ ...current, plan: payload.plan, planPrice: payload.planPrice });
+  if (current) persistUser({ ...current, plan: payload.plan, planPrice: payload.planPrice, proUntil: payload.proUntil ?? null });
   localStorage.setItem('missao_aprovacao_plan', payload.plan);
   window.dispatchEvent(new CustomEvent('plan_state_changed', { detail: { plan: payload.plan, planPrice: payload.planPrice } }));
 
-  return { success: true, plan: payload.plan, planPrice: payload.planPrice };
+  return { success: true, plan: payload.plan, planPrice: payload.planPrice, proUntil: payload.proUntil ?? null, message: payload.message };
 }
 
 export function getUserPlan() {
@@ -690,6 +701,7 @@ const SupabaseApplet = {
   getCurrentUser,
   upgradeUserPlan,
   startProCheckout,
+  confirmProPayment,
   refreshPlanFromServer,
   getUserPlan,
   loginWithGoogle,

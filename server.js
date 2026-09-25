@@ -8,7 +8,9 @@ import dataHandler from './api/data.js';
 import leaderboardHandler from './api/data/leaderboard.js';
 import paymentsHandler from './api/payments.js';
 import paymentsWebhookHandler from './api/payments/webhook.js';
+import paymentsConfirmHandler from './api/payments/confirm.js';
 import supabaseConfigHandler from './api/config/supabase.js';
+import billingConfigHandler from './api/config/billing.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,9 +37,7 @@ app.use((req, res, next) => {
 });
 
 // 2. Proteção de Body com limite de tamanho rigoroso (bloqueia DoS por exaustão de memória)
-// `verify` guarda os bytes brutos em req.rawBody — o webhook da AbacatePay
-// assina o corpo bruto (HMAC), não um JSON re-serializado por nós.
-app.use(express.json({ limit: '256kb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
+app.use(express.json({ limit: '256kb' }));
 app.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
 // 3. Middleware de captura de erros de parsing JSON (evita crash do Express em JSONs malformados)
@@ -113,10 +113,14 @@ app.use('/api/data', apiGeneralLimiter, (req, res) => {
   dataHandler(req, res);
 });
 
-// Pagamentos (AbacatePay) — criação de checkout de assinatura (autenticada)
-// e webhook de confirmação (público, protegido por segredo + assinatura HMAC própria)
+// Pagamentos (Mercado Pago) — checkout (autenticado), confirmação na volta
+// do checkout (autenticada) e webhook (público, protegido pela x-signature
+// e sempre re-consultando a API do Mercado Pago)
 app.post('/api/payments/webhook', apiGeneralLimiter, (req, res) => {
   paymentsWebhookHandler(req, res);
+});
+app.post('/api/payments/confirm', apiGeneralLimiter, (req, res) => {
+  paymentsConfirmHandler(req, res);
 });
 app.post('/api/payments', apiGeneralLimiter, (req, res) => {
   paymentsHandler(req, res);
@@ -125,6 +129,10 @@ app.post('/api/payments', apiGeneralLimiter, (req, res) => {
 // Configuração pública do Supabase Client para inicialização no navegador
 app.get('/api/config/supabase', apiGeneralLimiter, (req, res) => {
   supabaseConfigHandler(req, res);
+});
+
+app.get('/api/config/billing', apiGeneralLimiter, (req, res) => {
+  billingConfigHandler(req, res);
 });
 
 // 6. SPA main HTML routes (ensure the latest index.html is always served)

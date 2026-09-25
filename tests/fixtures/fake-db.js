@@ -152,10 +152,33 @@ export function buildNamedExports(store) {
       Object.values(store.subscriptions).find((s) => s.providerSubscriptionId === providerSubscriptionId) || null,
     getSubscriptionByProviderCustomerId: async (providerCustomerId) =>
       Object.values(store.subscriptions).find((s) => s.providerCustomerId === providerCustomerId) || null,
+    // Como o real: campo undefined não sobrescreve o que já estava gravado.
     upsertSubscription: async (data) => {
       const existing = store.subscriptions[data.userId] || {};
-      store.subscriptions[data.userId] = { ...existing, ...data };
+      const defined = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
+      store.subscriptions[data.userId] = { ...existing, ...defined };
       return store.subscriptions[data.userId];
+    },
+    // Mesma semântica da transação real: registra o pagamento (chave de
+    // idempotência) e soma os dias ao que resta, tudo sem await no meio.
+    grantProPass: async ({ userId, paymentId, days, amount, label, now = new Date() }) => {
+      if (store.subscriptionPayments.some((p) => p.providerPaymentId === paymentId)) return { status: 'duplicate' };
+      store.subscriptionPayments.push({ providerPaymentId: paymentId, providerSubscriptionId: paymentId, userId, status: 'paid', amount });
+      const user = store.users[userId] || (store.users[userId] = { uid: userId });
+      const current = user.proUntil ? new Date(user.proUntil).getTime() : 0;
+      const base = Math.max(now.getTime(), current);
+      Object.assign(user, { plan: 'pro', planPrice: label, proUntil: new Date(base + days * 24 * 60 * 60 * 1000) });
+      return { status: 'granted', user };
+    },
+    revokeProPass: async ({ userId, paymentId, days, now = new Date() }) => {
+      const payment = store.subscriptionPayments.find((p) => p.providerPaymentId === paymentId && p.userId === userId);
+      if (!payment || payment.status === 'refunded') return { status: 'not_found' };
+      payment.status = 'refunded';
+      const user = store.users[userId];
+      const until = user?.proUntil ? new Date(user.proUntil).getTime() - days * 24 * 60 * 60 * 1000 : 0;
+      if (until > now.getTime()) user.proUntil = new Date(until);
+      else Object.assign(user, { plan: 'free', proUntil: null });
+      return { status: 'revoked', user };
     },
     getSubscriptionPaymentByProviderPaymentId: async (providerPaymentId) =>
       store.subscriptionPayments.find((p) => p.providerPaymentId === providerPaymentId) || null,
