@@ -2,7 +2,27 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import { createAbacatePayClient } from '../src/payments/abacatepay.js';
 import { getSubscriptionByUserId, upsertSubscription } from '../src/db/queries.js';
 
-const PRO_PLAN_PRICE = 29.90;
+// Ciclos vendidos. O cliente só escolhe o ciclo; produto e valor são
+// sempre decididos aqui (nunca vêm da requisição).
+const PLANS = {
+  monthly: { productEnv: 'ABACATEPAY_PRODUCT_ID', amount: 29.90, label: 'mensal' },
+  annual: { productEnv: 'ABACATEPAY_PRODUCT_ID_ANNUAL', amount: 239.90, label: 'anual' },
+};
+
+// Na Vercel req.body já vem parseado; no Express também (express.json).
+// Fallback para o stream cru, com limite, se nenhum dos dois aconteceu.
+async function readBody(req) {
+  if (req.body && typeof req.body === 'object') return req.body;
+  if (typeof req.body === 'string') {
+    try { return JSON.parse(req.body || '{}'); } catch { return null; }
+  }
+  let raw = '';
+  for await (const chunk of req) {
+    raw += chunk;
+    if (raw.length > 16 * 1024) return null;
+  }
+  try { return raw ? JSON.parse(raw) : {}; } catch { return null; }
+}
 
 async function runRequireAuth(req, res) {
   let authorized = false;
@@ -33,10 +53,12 @@ function subscriptionMethods() {
 
 /**
  * POST /api/payments — cria um checkout de ASSINATURA da AbacatePay para o
- * PLANO PRO (R$ 29,90/mês, recorrente), sempre vinculada ao usuário
+ * PLANO PRO (mensal R$ 29,90 ou anual R$ 239,90, recorrente — body
+ * { cycle: 'monthly' | 'annual' }), sempre vinculada ao usuário
  * autenticado (req.user.uid) — nunca a um uid vindo do cliente.
  *
- * O produto (id em ABACATEPAY_PRODUCT_ID) e o webhook (URL + segredo) são
+ * Os produtos (ABACATEPAY_PRODUCT_ID e ABACATEPAY_PRODUCT_ID_ANNUAL) e o
+ * webhook (URL + segredo) são
  * configurados uma vez no painel da AbacatePay — não por requisição, como
  * era no Mercado Pago.
  *
@@ -55,10 +77,17 @@ export default async function paymentsHandler(req, res, deps = {}) {
 
   if (!(await runRequireAuth(req, res))) return;
 
-  const productId = process.env.ABACATEPAY_PRODUCT_ID;
+  const body = await readBody(req);
+  const cycle = body?.cycle ?? 'monthly';
+  const plan = Object.hasOwn(PLANS, cycle) ? PLANS[cycle] : null;
+  if (!plan) {
+    return res.status(400).json({ success: false, error: 'Plano inválido.' });
+  }
+
+  const productId = process.env[plan.productEnv];
   if (!productId) {
-    console.error('[Payments] ABACATEPAY_PRODUCT_ID não configurado no servidor.');
-    return res.status(503).json({ success: false, error: 'Pagamentos indisponíveis no momento.' });
+    console.error(`[Payments] ${plan.productEnv} não configurado no servidor.`);
+    return res.status(503).json({ success: false, error: `Plano ${plan.label} indisponível no momento.` });
   }
 
   let client;
@@ -115,7 +144,7 @@ export default async function paymentsHandler(req, res, deps = {}) {
       providerCustomerId: customerId,
       providerSubscriptionId: subscription.id,
       status: 'pending',
-      amount: PRO_PLAN_PRICE,
+      amount: plan.amount,
     });
 
     return res.status(200).json({

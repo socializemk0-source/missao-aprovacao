@@ -10,7 +10,14 @@ import {
   recordSubscriptionPayment,
 } from '../../src/db/queries.js';
 
-const PRO_PLAN_PRICE_LABEL = 'R$ 29,90';
+// Rótulo exibido no perfil, a partir do que a AbacatePay de fato cobrou
+// (valor em centavos + frequência da assinatura). Ex.: "R$ 239,90/ano".
+function planPriceLabel(subscription) {
+  const cents = Number.isFinite(subscription?.amount) ? subscription.amount : 2990;
+  const value = (cents / 100).toFixed(2).replace('.', ',');
+  const period = subscription?.frequency === 'ANNUALLY' ? '/ano' : '/mês';
+  return `R$ ${value}${period}`;
+}
 
 // Lê o corpo BRUTO da requisição — a assinatura HMAC da AbacatePay é sobre
 // os bytes exatos recebidos, não sobre um JSON re-serializado (que pode
@@ -53,8 +60,8 @@ async function resolveSubscriptionRow(data) {
   return null;
 }
 
-async function setPlan(userId, plan) {
-  const updated = await updateUser(userId, plan === 'pro' ? { plan: 'pro', planPrice: PRO_PLAN_PRICE_LABEL } : { plan: 'free' });
+async function setPlan(userId, plan, priceLabel) {
+  const updated = await updateUser(userId, plan === 'pro' ? { plan: 'pro', planPrice: priceLabel } : { plan: 'free' });
   if (updated) {
     await syncLeaderboardEntry({
       userId,
@@ -132,7 +139,7 @@ export default async function webhookHandler(req, res, deps = {}) {
         amount: data?.subscription?.amount !== undefined ? data.subscription.amount / 100 : undefined,
         currency: data?.subscription?.currency,
       });
-      await setPlan(row.userId, 'pro');
+      await setPlan(row.userId, 'pro', planPriceLabel(data?.subscription));
 
       const paymentId = data?.payment?.id;
       if (paymentId) {

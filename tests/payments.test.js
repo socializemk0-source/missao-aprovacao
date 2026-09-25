@@ -389,3 +389,62 @@ test('sem ABACATEPAY_SUBSCRIPTION_METHODS (ou com valor inválido) não envia me
   }
   delete process.env.ABACATEPAY_SUBSCRIPTION_METHODS;
 });
+
+// Plano mensal e anual: o cliente só escolhe o ciclo; produto e valor são
+// sempre decididos no servidor.
+test('checkout anual usa o produto anual e grava o valor anual', async () => {
+  process.env.ABACATEPAY_PRODUCT_ID_ANNUAL = 'prod_pro_anual';
+  try {
+    const client = fakeAbacatePayClient();
+    const res = makeRes();
+    await paymentsHandler(makeReq({ body: { cycle: 'annual' }, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+    assert.equal(res.statusCode, 200);
+    assert.equal(client.calls.createSubscription[0].productId, 'prod_pro_anual');
+    assert.equal(store.subscriptions.user_A.amount, 239.9);
+  } finally {
+    delete process.env.ABACATEPAY_PRODUCT_ID_ANNUAL;
+  }
+});
+
+test('checkout sem ciclo (ou "monthly") continua no produto mensal', async () => {
+  for (const body of [{}, { cycle: 'monthly' }]) {
+    resetStore(store);
+    const client = fakeAbacatePayClient();
+    const res = makeRes();
+    await paymentsHandler(makeReq({ body, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+    assert.equal(res.statusCode, 200);
+    assert.equal(client.calls.createSubscription[0].productId, 'prod_pro_29_90');
+    assert.equal(store.subscriptions.user_A.amount, 29.9);
+  }
+});
+
+test('ciclo desconhecido → 400, sem chamar a AbacatePay', async () => {
+  const client = fakeAbacatePayClient();
+  const res = makeRes();
+  await paymentsHandler(makeReq({ body: { cycle: 'vitalicio' }, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+  assert.equal(res.statusCode, 400);
+  assert.equal(client.calls.createCustomer.length + client.calls.createSubscription.length, 0);
+});
+
+test('anual sem ABACATEPAY_PRODUCT_ID_ANNUAL configurado → 503, sem chamar a AbacatePay', async () => {
+  delete process.env.ABACATEPAY_PRODUCT_ID_ANNUAL;
+  const client = fakeAbacatePayClient();
+  const res = makeRes();
+  await paymentsHandler(makeReq({ body: { cycle: 'annual' }, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+  assert.equal(res.statusCode, 503);
+  assert.equal(client.calls.createSubscription.length, 0);
+});
+
+test('webhook de assinatura anual grava o rótulo do plano como anual', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_anual', status: 'pending' };
+  const data = {
+    subscription: { id: 'subs_anual', amount: 23990, currency: 'BRL', frequency: 'ANNUALLY', status: 'ACTIVE' },
+    customer: { id: 'cust_1' },
+    payment: { id: 'char_anual', paidAmount: 23990, status: 'PAID' },
+    checkout: { id: 'bill_anual' },
+  };
+  const { req, deps } = makeWebhookReq({ event: 'subscription.completed', data });
+  await webhookHandler(req, makeRes(), deps);
+  assert.equal(store.users.user_A.plan, 'pro');
+  assert.equal(store.users.user_A.planPrice, 'R$ 239,90/ano');
+});
