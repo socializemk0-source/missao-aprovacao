@@ -111,15 +111,15 @@ export const viewedTips = pgTable('viewed_tips', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// Assinatura recorrente do Plano PRO (AbacatePay Subscriptions). Uma
-// linha por usuário com o estado atual — atualizada a cada webhook
-// subscription.* da AbacatePay (completed/renewed/payment_failed/cancelled).
+// Assinatura recorrente do Plano PRO (Mercado Pago, preapproval). Uma
+// linha por usuário com o estado atual — atualizada pelos webhooks
+// subscription_preapproval / subscription_authorized_payment.
 export const subscriptions = pgTable('subscriptions', {
   id: serial('id').primaryKey(),
   userId: text('user_id').notNull().unique(), // uid do Supabase Auth — nunca vindo do cliente
-  providerCustomerId: text('provider_customer_id'), // customer da AbacatePay — criado uma vez, reaproveitado
+  providerCustomerId: text('provider_customer_id'), // não usado pelo Mercado Pago (legado)
   providerSubscriptionId: text('provider_subscription_id').unique(),
-  status: text('status').notNull().default('none'), // none | pending | active | payment_failed | cancelled
+  status: text('status').notNull().default('none'), // none | pending | active | payment_failed | cancelled | pass_active
   plan: text('plan').default('pro'),
   amount: numeric('amount', { precision: 10, scale: 2 }).default('29.90'),
   currency: text('currency').default('BRL'),
@@ -130,11 +130,11 @@ export const subscriptions = pgTable('subscriptions', {
 
 // Histórico de cobranças recorrentes já processadas — registro de
 // auditoria e chave de idempotência (providerPaymentId é único: o webhook
-// da AbacatePay pode reenviar a mesma notificação várias vezes, e nunca
+// do Mercado Pago pode reenviar a mesma notificação várias vezes, e nunca
 // deve aplicar a mesma cobrança duas vezes).
 export const subscriptionPayments = pgTable('subscription_payments', {
   id: serial('id').primaryKey(),
-  providerPaymentId: text('provider_payment_id').notNull().unique(), // ID do pagamento na AbacatePay
+  providerPaymentId: text('provider_payment_id').notNull().unique(), // ID do pagamento no Mercado Pago
   providerSubscriptionId: text('provider_subscription_id').notNull(),
   userId: text('user_id').notNull(),
   status: text('status').notNull(), // paid | pending | failed | ...

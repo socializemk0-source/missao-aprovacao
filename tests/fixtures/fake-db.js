@@ -152,9 +152,11 @@ export function buildNamedExports(store) {
       Object.values(store.subscriptions).find((s) => s.providerSubscriptionId === providerSubscriptionId) || null,
     getSubscriptionByProviderCustomerId: async (providerCustomerId) =>
       Object.values(store.subscriptions).find((s) => s.providerCustomerId === providerCustomerId) || null,
+    // Como o real: campo undefined não sobrescreve o que já estava gravado.
     upsertSubscription: async (data) => {
       const existing = store.subscriptions[data.userId] || {};
-      store.subscriptions[data.userId] = { ...existing, ...data };
+      const defined = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
+      store.subscriptions[data.userId] = { ...existing, ...defined };
       return store.subscriptions[data.userId];
     },
     // Mesma semântica da transação real: registra o pagamento (chave de

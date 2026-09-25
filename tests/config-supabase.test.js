@@ -45,16 +45,16 @@ test('GET /api/config/supabase responde 503 (nunca finge sucesso) quando a confi
   process.env.SUPABASE_ANON_KEY = originalKey;
 });
 
-test('GET /api/config/billing informa o modo de cobrança (assinatura por padrão, passe com ABACATEPAY_BILLING_MODE=pass)', async () => {
+test('GET /api/config/billing informa o modo de cobrança (passe por padrão, assinatura com MERCADOPAGO_BILLING_MODE=subscription)', async () => {
   const { default: billingConfigHandler } = await import('../api/config/billing.js');
-  delete process.env.ABACATEPAY_BILLING_MODE;
+  delete process.env.MERCADOPAGO_BILLING_MODE;
   let res = makeRes();
   billingConfigHandler(makeReq({ method: 'GET' }), res);
-  assert.equal(res.body.mode, 'subscription');
+  assert.equal(res.body.mode, 'pass');
 
-  process.env.ABACATEPAY_BILLING_MODE = 'pass';
+  process.env.MERCADOPAGO_BILLING_MODE = 'subscription';
   res = makeRes();
   billingConfigHandler(makeReq({ method: 'GET' }), res);
-  assert.equal(res.body.mode, 'pass');
-  delete process.env.ABACATEPAY_BILLING_MODE;
+  assert.equal(res.body.mode, 'subscription');
+  delete process.env.MERCADOPAGO_BILLING_MODE;
 });

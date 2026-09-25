@@ -490,7 +490,7 @@ export async function getViewedTipsByUserId(userId) {
   }
 }
 
-// Buscar assinatura atual do usuário (estado local da assinatura na AbacatePay)
+// Buscar assinatura atual do usuário (estado local da assinatura no Mercado Pago)
 export async function getSubscriptionByUserId(userId) {
   try {
     const res = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
@@ -590,7 +590,7 @@ export async function grantProPass({ userId, paymentId, days, amount, label }) {
         .where(eq(users.uid, userId))
         .returning();
       // Sem usuário, desfaz tudo: o pagamento não pode ficar marcado como
-      // processado sem ter dado o PRO (o 5xx faz a AbacatePay reenviar).
+      // processado sem ter dado o PRO (o 5xx faz o Mercado Pago reenviar).
       if (!user) throw new Error(`usuário ${userId} não encontrado para o passe`);
       return { status: 'granted', user };
     });

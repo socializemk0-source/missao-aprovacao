@@ -28,10 +28,10 @@
       monthly: { whole: '29', cents: ',90', period: '/ mês', subtext: 'Menos de R$ 1,00 por dia · cancele quando quiser' },
       annual: { whole: '19', cents: ',99', period: '/ mês', subtext: 'R$ 239,90 cobrados por ano · economize R$ 118,90' },
     },
-    // Modo passe (PIX avulso): paga uma vez e ganha 30 dias / 1 ano de PRO.
+    // Modo passe (pagamento único): paga uma vez e ganha 30 dias / 1 ano de PRO.
     passCycles: {
-      monthly: { whole: '29', cents: ',90', period: '/ 30 dias', subtext: 'Pagamento único via PIX · sem renovação automática' },
-      annual: { whole: '239', cents: ',90', period: '/ 1 ano', subtext: 'Pagamento único via PIX · sai por R$ 19,99/mês' },
+      monthly: { whole: '29', cents: ',90', period: '/ 30 dias', subtext: 'Pagamento único no PIX ou cartão · sem renovação automática' },
+      annual: { whole: '239', cents: ',90', period: '/ 1 ano', subtext: 'Pagamento único no PIX ou cartão · sai por R$ 19,99/mês' },
     },
     periodLabel: 'Assinatura Mensal · Cancele quando quiser',
     freeChapterLimit: 5, // Capítulos 1 a 5 no modo gratuito (índices 0 a 4)
@@ -117,52 +117,74 @@
       return this.getPlan() === 'pro';
     },
 
-    // Virar PRO: redireciona para o checkout real da AbacatePay (a
+    // Virar PRO: redireciona para o checkout real do Mercado Pago (a
     // página navega para fora — nada aqui "ativa" nada de fato; só o
-    // webhook confirmado no servidor faz isso, ver api/payments.js).
+    // servidor, conferindo o pagamento na API do Mercado Pago, faz isso).
     // Voltar para grátis: autosserviço direto, sem risco de segurança.
     async setPlan(newPlan, cycle = 'monthly') {
       if (newPlan === 'pro') {
         if (!window.MissaoFirebase || typeof window.MissaoFirebase.startProCheckout !== 'function') {
           throw new Error('Pagamento indisponível no momento. Tente novamente em instantes.');
         }
-        await window.MissaoFirebase.startProCheckout(cycle); // navega para a AbacatePay
+        await window.MissaoFirebase.startProCheckout(cycle); // navega para o Mercado Pago
         return true;
       }
 
+      let result = { plan: 'free' };
       if (window.MissaoFirebase && typeof window.MissaoFirebase.upgradeUserPlan === 'function') {
-        await window.MissaoFirebase.upgradeUserPlan('free');
+        result = await window.MissaoFirebase.upgradeUserPlan('free');
       }
-      localStorage.setItem('missao_aprovacao_plan', 'free');
-      window.dispatchEvent(new CustomEvent('plan_state_changed', { detail: { plan: 'free', planPrice: PLAN_CONFIG.price } }));
+      // Assinatura cancelada com período pago: o servidor mantém o PRO até a data.
+      if (result?.plan !== 'pro') {
+        localStorage.setItem('missao_aprovacao_plan', 'free');
+        window.dispatchEvent(new CustomEvent('plan_state_changed', { detail: { plan: 'free', planPrice: PLAN_CONFIG.price } }));
+      }
       this.updateUI();
-      return true;
+      return result;
     },
 
-    // Ao voltar do checkout da AbacatePay (?payment=success|pending|failure),
-    // NUNCA confia nesse parâmetro (é controlável pelo usuário) — busca o
-    // plano real no servidor e só então reflete na interface.
+    // Ao voltar do checkout do Mercado Pago (?payment=return, mais os
+    // parâmetros que ele acrescenta: payment_id/collection_id e status no
+    // passe, preapproval_id na assinatura). NUNCA confia nesses parâmetros
+    // (são controláveis pelo usuário): o servidor confere o pagamento na
+    // API do Mercado Pago e só então a interface reflete o plano.
     async checkPaymentReturn() {
       const params = new URLSearchParams(window.location.search);
-      const status = params.get('payment');
-      if (!status) return;
+      if (!params.has('payment')) return;
+      const paymentId = params.get('payment_id') || params.get('collection_id');
+      const preapprovalId = params.get('preapproval_id');
+      const mpStatus = params.get('collection_status') || params.get('status') || params.get('payment');
 
       const url = new URL(window.location.href);
-      url.searchParams.delete('payment');
+      ['payment', 'payment_id', 'collection_id', 'collection_status', 'status', 'external_reference', 'payment_type',
+        'merchant_order_id', 'preference_id', 'site_id', 'processing_mode', 'merchant_account_id', 'preapproval_id']
+        .forEach((key) => url.searchParams.delete(key));
       history.replaceState({}, '', url.pathname + url.search + url.hash);
 
-      if (status === 'failure') {
+      // "null": voltou pelo link do checkout sem pagar.
+      if (mpStatus === 'failure' || mpStatus === 'rejected' || mpStatus === 'null' || mpStatus === 'cancelled') {
         this.openModal('details', 'O pagamento não foi concluído. Você pode tentar novamente quando quiser.');
         return;
       }
 
+      // supabase-client.js é um módulo e costuma carregar DEPOIS deste
+      // script — espera a ponte ficar pronta (como refreshPlanOnLoad).
+      for (let i = 0; i < 25 && !window.MissaoFirebase?.refreshPlanFromServer; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
       if (!window.MissaoFirebase || typeof window.MissaoFirebase.refreshPlanFromServer !== 'function') return;
+
+      const validId = (id) => (id && /^[A-Za-z0-9_-]{1,64}$/.test(id) && id !== 'null' ? id : null);
+      const confirmArgs = validId(paymentId) ? { paymentId } : (validId(preapprovalId) ? { preapprovalId } : null);
 
       // O webhook pode chegar alguns segundos depois do redirecionamento
       // de volta — tenta algumas vezes antes de desistir.
       for (let attempt = 0; attempt < 6; attempt++) {
         let profile = null;
         try {
+          if (confirmArgs && typeof window.MissaoFirebase.confirmProPayment === 'function') {
+            await window.MissaoFirebase.confirmProPayment(confirmArgs);
+          }
           profile = await window.MissaoFirebase.refreshPlanFromServer();
         } catch (_) {}
 
@@ -175,7 +197,7 @@
               <div class="tico-plan-success-splash">
                 <div class="tico-success-icon">🎉👑</div>
                 <h2>Parabéns, Concurseiro PRO!</h2>
-                <p>Sua <strong>assinatura Passaporte Aprovação PRO</strong> foi confirmada e ativada.</p>
+                <p>Seu <strong>Passaporte Aprovação PRO</strong> foi confirmado e ativado.</p>
                 <div class="tico-success-unlocked-card">
                   <ul>
                     <li>✓ Vidas Infinitas (∞) desbloqueadas</li>
@@ -197,8 +219,8 @@
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
-      if (status === 'pending') {
-        this.openModal('details', 'Seu pagamento está em análise. Assim que for aprovado o PRO libera automaticamente — pode continuar estudando enquanto isso.');
+      if (mpStatus === 'pending' || mpStatus === 'in_process') {
+        this.openModal('details', 'Seu pagamento está em processamento. Assim que for aprovado o PRO libera automaticamente — pode continuar estudando enquanto isso.');
       } else {
         this.openModal('details', 'Estamos confirmando seu pagamento. Se a confirmação demorar mais que alguns minutos, atualize a página.');
       }
@@ -379,13 +401,13 @@
       if (!cycles[this.selectedCycle]) this.selectedCycle = 'monthly';
       const cycle = this.selectedCycle;
       const cycleInfo = cycles[cycle];
-      // Passe PRO: tem data de validade. Quem tem passe pode comprar mais
-      // tempo; não há assinatura para cancelar.
+      // PRO com data de fim (passe, ou assinatura cancelada no período já
+      // pago): no modo passe dá para comprar mais tempo; não há nada a cancelar.
       const proUntil = user?.proUntil ? new Date(user.proUntil) : null;
       const validUntil = proUntil && !Number.isNaN(proUntil.getTime()) ? proUntil.toLocaleDateString('pt-BR') : null;
       const isPassUser = isPro && Boolean(validUntil);
       const showPurchase = !isPro || (passMode && isPassUser);
-      const ctaLabel = passMode ? (isPro ? 'Adicionar mais tempo via PIX' : 'Pagar com PIX') : 'Assinar agora';
+      const ctaLabel = passMode ? (isPro ? 'Adicionar mais tempo' : 'Pagar com PIX ou cartão') : 'Assinar agora';
 
       inner.innerHTML = `
         <div class="tico-plan-modal-header">
@@ -403,7 +425,7 @@
                 ? `Seu PRO está ativo até <strong>${validUntil}</strong>: acesso ilimitado a todos os 37 capítulos, 111 fases e redações com IA.`
                 : 'Sua assinatura está ativa: acesso ilimitado a todos os 37 capítulos, 111 fases e redações com IA.')
               : (passMode
-                ? 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por <strong>R$ 29,90 (30 dias)</strong> ou <strong>R$ 239,90 (1 ano)</strong>, pagos via PIX.'
+                ? 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por <strong>R$ 29,90 (30 dias)</strong> ou <strong>R$ 239,90 (1 ano)</strong>, pagos no PIX ou no cartão.'
                 : 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por <strong>R$ 29,90/mês</strong> ou <strong>R$ 239,90/ano</strong>.')}
           </p>
         </div>
@@ -423,7 +445,7 @@
             <div class="tico-pricing-card-body">
               ${isPro
                 ? (isPassUser
-                  ? `<div class="tico-pricing-cta-ghost is-current">Volta sozinho quando o passe vencer</div>`
+                  ? `<div class="tico-pricing-cta-ghost is-current">Sem renovação automática · volta para o Grátis em ${validUntil}</div>`
                   : `<button type="button" class="tico-pricing-cta-ghost" id="tico-toggle-free-btn">Cancelar assinatura e voltar para o Grátis</button>`)
                 : `<div class="tico-pricing-cta-ghost is-current">Seu plano atual</div>`}
               <ul class="tico-pricing-feature-list">
@@ -448,12 +470,12 @@
                 <span class="tico-pricing-period" data-price-period>${cycleInfo.period}</span>
               </div>
               <span class="tico-pricing-price-subtext" data-price-subtext>
-                ${showPurchase ? cycleInfo.subtext : `✨ Assinatura ativa${user?.planPrice ? ` · ${escapeHtml(user.planPrice)}` : ''}`}
+                ${showPurchase ? cycleInfo.subtext : (isPassUser ? `✨ PRO ativo até ${validUntil}` : `✨ Assinatura ativa${user?.planPrice ? ` · ${escapeHtml(user.planPrice)}` : ''}`)}
               </span>
             </div>
             <div class="tico-pricing-card-body">
               ${!showPurchase
-                ? `<div class="tico-pricing-active-stamp">👑 Assinatura Ativa</div>`
+                ? `<div class="tico-pricing-active-stamp">${isPassUser ? '👑 PRO Ativo' : '👑 Assinatura Ativa'}</div>`
                 : `<button type="button" class="tico-plan-cta-button tico-pricing-cta-full pulse" id="tico-confirm-pro-btn">
                     <span>${ctaLabel}</span>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
@@ -471,7 +493,7 @@
           ${isPro
             ? `<p class="tico-plan-success-notice">✅ ${isPassUser ? `Seu PRO vale até ${validUntil}.` : 'Sua assinatura PRO está ativa nesta conta.'}</p>`
             : `<p class="tico-plan-security-note">
-                🔒 Pagamento seguro via AbacatePay (${passMode ? 'PIX' : 'PIX ou cartão'}) · Garantia de 7 dias ou seu dinheiro de volta
+                🔒 Pagamento seguro via Mercado Pago (${passMode ? 'PIX ou cartão' : 'cartão de crédito'}) · Garantia de 7 dias ou seu dinheiro de volta
               </p>`}
         </div>
       `;
@@ -490,7 +512,7 @@
         });
       });
 
-      // Botão Ativar PRO — redireciona para o checkout real da AbacatePay.
+      // Botão Ativar PRO — redireciona para o checkout real do Mercado Pago.
       const confirmBtn = inner.querySelector('#tico-confirm-pro-btn');
       const checkoutError = inner.querySelector('#tico-plan-checkout-error');
       if (confirmBtn) {
@@ -500,7 +522,7 @@
           const originalContent = confirmBtn.innerHTML;
           confirmBtn.innerHTML = '<span>Abrindo pagamento seguro...</span>';
           try {
-            await TicoPlan.setPlan('pro', TicoPlan.selectedCycle); // navega para a AbacatePay (não retorna se der certo)
+            await TicoPlan.setPlan('pro', TicoPlan.selectedCycle); // navega para o Mercado Pago (não retorna se der certo)
           } catch (err) {
             confirmBtn.disabled = false;
             confirmBtn.innerHTML = originalContent;
@@ -512,17 +534,19 @@
         });
       }
 
-      // Botão Cancelar Assinatura — cancela de verdade na AbacatePay
-      // antes de voltar para o modo grátis (ver api/auth.js downgrade-to-free).
+      // Botão Cancelar Assinatura — pede confirmação e cancela de verdade no
+      // Mercado Pago (ver api/auth.js downgrade-to-free). O período já pago
+      // continua valendo até a data da próxima cobrança.
       const toggleFreeBtn = inner.querySelector('#tico-toggle-free-btn');
       if (toggleFreeBtn) {
         toggleFreeBtn.addEventListener('click', async () => {
+          if (!confirm('Cancelar a assinatura PRO? Você não será mais cobrado, e o PRO continua até o fim do período já pago.')) return;
           toggleFreeBtn.disabled = true;
           const originalLabel = toggleFreeBtn.innerHTML;
           toggleFreeBtn.innerHTML = 'Cancelando assinatura...';
           try {
-            await TicoPlan.setPlan('free');
-            TicoPlan.renderModalContent(modal);
+            const result = await TicoPlan.setPlan('free');
+            TicoPlan.renderModalContent(modal, 'details', result?.message ? escapeHtml(result.message) : '');
           } catch (err) {
             toggleFreeBtn.disabled = false;
             toggleFreeBtn.innerHTML = originalLabel;
@@ -795,7 +819,7 @@
     init() {
       window.TicoPlan = this;
 
-      this.billingMode = 'subscription';
+      this.billingMode = 'pass';
       fetch('/api/config/billing')
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {

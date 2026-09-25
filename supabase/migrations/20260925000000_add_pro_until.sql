@@ -1,4 +1,4 @@
--- Passe PRO pago por PIX avulso (ABACATEPAY_BILLING_MODE=pass): o PRO passa
--- a ter data de validade. NULL = sem validade (PRO por assinatura recorrente,
--- que é revogado pelo webhook subscription.cancelled).
+-- PRO com data de validade: passe pago uma vez (PIX ou cartão) ou assinatura
+-- cancelada que ainda tem período pago. NULL = sem validade (assinatura
+-- recorrente ativa).
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS pro_until timestamptz;

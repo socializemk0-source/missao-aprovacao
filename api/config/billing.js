@@ -1,6 +1,6 @@
 // GET /api/config/billing — modo de cobrança do Plano PRO, para a tela de
-// planos mostrar os textos certos: "subscription" (assinatura recorrente) ou
-// "pass" (PIX avulso que dá 30/365 dias). Arquivo próprio para existir como
+// planos mostrar os textos certos: "pass" (pagamento único no PIX ou cartão
+// que dá 30/365 dias) ou "subscription" (assinatura recorrente no cartão). Arquivo próprio para existir como
 // função no roteamento por arquivo da Vercel.
 import { billingMode } from '../../src/plan.js';
 
