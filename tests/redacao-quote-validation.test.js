@@ -86,6 +86,8 @@ test('trecho citado igual ao texto do aluno, mas com quebra de linha trocada por
 
   assert.equal(res.statusCode, 200, `esperava 200, recebeu ${res.statusCode} (${JSON.stringify(body)})`);
   assert.ok(body.report, 'deve retornar a avaliação, não um erro de trecho divergente');
+  // O jogo confere o trecho com includes() literal: tem que voltar com o "\n" original.
+  assert.ok(STUDENT_TEXT.includes(body.report.annotations[0].quote), body.report.annotations[0]?.quote);
 });
 
 test('trecho citado com acentuação Unicode decomposta (mesmo texto visível, representação diferente) ainda é aceito', async () => {
@@ -100,13 +102,17 @@ test('trecho citado com acentuação Unicode decomposta (mesmo texto visível, r
 
   assert.equal(res.statusCode, 200, `esperava 200, recebeu ${res.statusCode} (${JSON.stringify(body)})`);
   assert.ok(body.report, 'deve retornar a avaliação, não um erro de trecho divergente');
+  assert.equal(body.report.annotations.length, 1, 'o trecho tem que ser mantido, não descartado');
 });
 
-test('[guarda-corpo intacto] trecho inventado (que não existe de forma alguma no texto) ainda é rejeitado', async () => {
+test('[guarda-corpo intacto] trecho inventado (que não existe de forma alguma no texto) nunca chega ao aluno', async () => {
+  // Antes a avaliação inteira era recusada (IA_TRECHO_DIVERGENTE), o que
+  // fazia a correção falhar ao acaso. Agora só o trecho inventado sai; as
+  // notas continuam valendo, e nenhuma citação falsa é mostrada.
   const send = async () => fakeOpenAiResponse(validReportWithQuote('frase completamente inventada pela IA que o aluno nunca escreveu'));
 
   const { res, body } = await postEssay(send);
 
-  assert.equal(res.statusCode, 502);
-  assert.equal(body.code, 'IA_TRECHO_DIVERGENTE');
+  assert.equal(res.statusCode, 200, JSON.stringify(body));
+  assert.deepEqual(body.report.annotations, []);
 });
