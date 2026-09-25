@@ -752,8 +752,8 @@ if (typeof window !== 'undefined') {
 // depender de nenhum componente pedir isso.
 //
 // O cache local só vale se for DESTA sessão: um convidado de antes (ou
-// outra conta) não pode esconder o login novo. E quem tem sessão e cai na
-// página inicial, em /entrar ou em /cadastro vai direto para o jogo.
+// outra conta) não pode esconder o login novo. Quem tem sessão e abre
+// /entrar ou /cadastro vai direto para o jogo.
 const ENTRY_ROUTES = ['/', '/entrar', '/cadastro'];
 (async function hydrateFreshSessionOnLoad() {
   try {
@@ -771,8 +771,11 @@ const ENTRY_ROUTES = ['/', '/entrar', '/cadastro'];
       user = await hydrateSessionUser(data.session);
     }
 
+    // A página inicial só redireciona logo depois de um login novo (ex.: a
+    // volta do Google); visitá-la depois, já logado, continua possível.
     const path = window.location.pathname.replace(/\/+$/, '') || '/';
-    if (user && !PASSWORD_RECOVERY_RETURN && ENTRY_ROUTES.includes(path)) {
+    const shouldEnterGame = path === '/' ? !cacheMatches : ENTRY_ROUTES.includes(path);
+    if (user && !PASSWORD_RECOVERY_RETURN && shouldEnterGame) {
       window.location.replace('/jogar');
     }
   } catch (_) {

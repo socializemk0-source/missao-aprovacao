@@ -328,7 +328,7 @@
           <div style="display: flex; flex-direction: column; gap: 10px;">
             ${!isPro ? `
               <button type="button" class="tico-plan-confirm-btn" id="tico-profile-upgrade-btn" style="width: 100%;">
-                <span>👑 Assinar Modo PRO (R$ 29,90/mês)</span>
+                <span>👑 Conhecer o Plano PRO</span>
               </button>
             ` : ''}
             <button type="button" id="tico-profile-logout-btn" style="background: #fff; border: 1px solid #fecaca; color: #dc2626; padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
@@ -591,6 +591,7 @@
       }
 
       const targetSelectors = [
+        'header.topbar .stats', // cabeçalho das telas do jogo (/jogar, /redacao...)
         '.vlp-header-actions',
         '.account-header',
         'header.lp-wrap',
@@ -623,6 +624,10 @@
           document.body.appendChild(userBtn);
           userBtn.classList.add('floating-top-right-user');
         }
+      } else if (container && userBtn.parentElement !== container) {
+        // O botão foi criado antes do React montar o cabeçalho (ficava
+        // largado no fim da página, atrás da navegação) — move para o lugar.
+        container.appendChild(userBtn);
       }
 
       if (user) {
@@ -644,6 +649,8 @@
         userBtn.title = 'Criar conta gratuita ou entrar para salvar progresso';
         userBtn.onclick = () => { window.location.href = '/cadastro'; };
       }
+      // Trocar a className acima apagava o posicionamento flutuante.
+      userBtn.classList.toggle('floating-top-right-user', userBtn.parentElement === document.body);
 
       // O antigo botão "MODO PRO" flutuante foi removido — a entrada para
       // conhecer/ativar o PRO agora é a aba "Planos" da barra de navegação
