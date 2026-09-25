@@ -1,5 +1,15 @@
 import { requireAuth } from '../middleware/requireAuth.js';
 import { queryLeaderboardEntries } from '../src/leaderboard.js';
+import { computeStatsUpdate } from '../src/player-stats.js';
+import { parseGameSnapshot } from '../src/game-snapshot.js';
+import {
+  missionDefinitions,
+  findMission,
+  bonusChestId,
+  rewardXpForMissionId,
+  isClaimableDate,
+  BONUS_CHEST,
+} from '../src/daily-missions.js';
 import {
   getAllUsers,
   getUserByUid,
@@ -7,10 +17,14 @@ import {
   syncLeaderboardEntry,
   saveUserProgress,
   getUserProgress,
-  saveEssay,
+  getGameSnapshot,
+  saveGameSnapshot,
   getEssaysByUser,
   updateDailyMission,
   getDailyMissions,
+  getClaimedMissionIds,
+  claimMissionReward,
+  claimBonusChest,
   recordViewedTipInDb,
   getViewedTipsByUserId
 } from '../src/db/queries.js';
@@ -20,6 +34,49 @@ async function runRequireAuth(req, res) {
   await requireAuth(req, res, () => { authorized = true; });
   return authorized; // se false, requireAuth já respondeu 401
 }
+
+function syncLeaderboardFor(uid, user) {
+  if (!user) return Promise.resolve();
+  return syncLeaderboardEntry({
+    userId: uid,
+    name: user.name,
+    targetExam: user.targetExam || 'Polícia Federal',
+    city: user.city || 'Brasil',
+    questionsAnswered: 0,
+    streak: user.streak || 1,
+    xp: user.xp || 0,
+    plan: user.plan || 'free',
+  }).catch(() => {});
+}
+
+function publicUser(user) {
+  if (!user) return user;
+  const { passwordHash: _omit, ...rest } = user;
+  return rest;
+}
+
+// save-stats e save-game passam pelas mesmas regras de integridade.
+async function applyStatsUpdate(uid, input) {
+  const current = await getUserByUid(uid);
+  if (!current) return null;
+  const claimedIds = await getClaimedMissionIds(uid);
+  const rewardXp = claimedIds.reduce((sum, id) => sum + rewardXpForMissionId(id), 0);
+  const fields = computeStatsUpdate({ current, input, rewardXp });
+  if (Object.keys(fields).length === 0) return current;
+  const updated = await updateUser(uid, fields);
+  await syncLeaderboardFor(uid, updated);
+  return updated;
+}
+
+function snapshotSummary(snap, withState) {
+  if (!snap) return null;
+  return { xp: snap.xp, updatedAt: snap.updatedAt, ...(withState ? { state: snap.state } : {}) };
+}
+
+const CLAIM_REFUSALS = {
+  not_completed: 'Essa recompensa ainda não foi liberada.',
+  already_claimed: 'Essa recompensa já foi resgatada.',
+};
 
 /**
  * Handler principal para dados da plataforma (progresso, redações,
@@ -55,43 +112,102 @@ export default async function dataHandler(req, res) {
     }
   }
 
-  // 1.1b Estatísticas do jogador (xp/streak/hearts) — sempre a própria conta
+  // 1.1b Estatísticas do jogador (xp/streak/hearts) — sempre a própria
+  // conta, e sempre passando pelas regras de src/player-stats.js.
   if (action === 'save-stats') {
     if (!(await runRequireAuth(req, res))) return;
     try {
-      const { xp, streak, hearts } = req.body || {};
-      const fields = {};
-      if (Number.isFinite(Number(xp))) fields.xp = Number(xp);
-      if (Number.isFinite(Number(streak))) fields.streak = Number(streak);
-      if (Number.isFinite(Number(hearts))) fields.hearts = Number(hearts);
-      const updated = await updateUser(req.user.uid, fields);
-      if (updated) {
-        await syncLeaderboardEntry({
-          userId: req.user.uid,
-          name: updated.name,
-          targetExam: updated.targetExam || 'Polícia Federal',
-          city: updated.city || 'Brasil',
-          questionsAnswered: 0,
-          streak: updated.streak || 1,
-          xp: updated.xp || 0,
-          plan: updated.plan || 'free',
-        }).catch(() => {});
-      }
-      delete updated?.passwordHash;
-      return res.status(200).json({ success: true, user: updated });
+      const updated = await applyStatsUpdate(req.user.uid, req.body || {});
+      if (!updated) return res.status(404).json({ success: false, error: 'Perfil não encontrado.' });
+      return res.status(200).json({ success: true, user: publicUser(updated) });
     } catch (e) {
       return res.status(500).json({ success: false, error: e.message });
     }
   }
 
-  // 1.2 Missões Diárias (daily_missions)
+  // 1.1c Snapshot completo do jogo (trilha) — ver src/game-snapshot.js
+  if (action === 'get-game') {
+    if (!(await runRequireAuth(req, res))) return;
+    try {
+      const snap = await getGameSnapshot(req.user.uid);
+      return res.status(200).json({ success: true, snapshot: snapshotSummary(snap, true) });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  if (action === 'save-game') {
+    if (!(await runRequireAuth(req, res))) return;
+    try {
+      const parsed = parseGameSnapshot(req.body?.state);
+      if (parsed.error) return res.status(parsed.status).json({ success: false, error: parsed.error });
+
+      const saved = await saveGameSnapshot(req.user.uid, req.body.state, parsed.xp);
+      if (!saved) {
+        const current = await getGameSnapshot(req.user.uid);
+        return res.status(200).json({ success: true, accepted: false, snapshot: snapshotSummary(current, false) });
+      }
+
+      await saveUserProgress(req.user.uid, JSON.stringify(parsed.completed), parsed.answered, parsed.correct);
+      await applyStatsUpdate(req.user.uid, { xp: parsed.xp });
+      return res.status(200).json({ success: true, accepted: true, snapshot: snapshotSummary(saved, false) });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  // 1.2 Missões Diárias (daily_missions). Meta, "concluída" e "resgatada"
+  // são decididos aqui — o cliente só informa o progresso.
   if (action === 'save-mission') {
     if (!(await runRequireAuth(req, res))) return;
     try {
-      const { dateStr, missionId, progress, target, completed, claimed } = req.body || {};
-      if (!dateStr || !missionId) return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes' });
-      const saved = await updateDailyMission(req.user.uid, dateStr, missionId, Number(progress || 0), Number(target || 1), Number(completed || 0), Number(claimed || 0));
+      const { dateStr, missionId, progress } = req.body || {};
+      if (!isClaimableDate(dateStr)) return res.status(400).json({ success: false, error: 'Data de missão inválida.' });
+      const mission = findMission(dateStr, missionId);
+      if (!mission) return res.status(400).json({ success: false, error: 'Missão desconhecida.' });
+      const existing = (await getDailyMissions(req.user.uid, dateStr)).find((m) => m.missionId === missionId);
+      const requested = Math.round(Number(progress) || 0);
+      const safeProgress = Math.min(mission.target, Math.max(existing?.progress || 0, requested, 0));
+      const saved = await updateDailyMission(
+        req.user.uid, dateStr, missionId, safeProgress, mission.target,
+        safeProgress >= mission.target ? 1 : 0,
+        existing?.claimed ? 1 : 0,
+      );
       return res.status(200).json({ success: true, mission: saved });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  if (action === 'claim-mission' || action === 'claim-chest') {
+    if (!(await runRequireAuth(req, res))) return;
+    try {
+      const { dateStr, missionId } = req.body || {};
+      if (!isClaimableDate(dateStr)) return res.status(400).json({ success: false, error: 'Data de missão inválida.' });
+
+      let result;
+      if (action === 'claim-mission') {
+        const mission = findMission(dateStr, missionId);
+        if (!mission) return res.status(400).json({ success: false, error: 'Missão desconhecida.' });
+        result = await claimMissionReward({
+          userId: req.user.uid, dateStr, missionId, target: mission.target, xp: mission.xpReward,
+        });
+      } else {
+        result = await claimBonusChest({
+          userId: req.user.uid,
+          dateStr,
+          chestId: bonusChestId(dateStr),
+          missionIds: missionDefinitions(dateStr).map((m) => m.id),
+          requiredCompleted: BONUS_CHEST.requiredCompleted,
+          xp: BONUS_CHEST.xpReward,
+        });
+      }
+
+      if (result.status !== 'claimed') {
+        return res.status(409).json({ success: false, code: result.status, error: CLAIM_REFUSALS[result.status] });
+      }
+      await syncLeaderboardFor(req.user.uid, result.user);
+      return res.status(200).json({ success: true, user: publicUser(result.user) });
     } catch (e) {
       return res.status(500).json({ success: false, error: e.message });
     }
@@ -132,19 +248,8 @@ export default async function dataHandler(req, res) {
     }
   }
 
-  // 1.4 Redações (essays)
-  if (action === 'save-essay') {
-    if (!(await runRequireAuth(req, res))) return;
-    try {
-      const { essayId, topic, banca, content, score, feedback, criterios } = req.body || {};
-      if (!essayId || !content) return res.status(400).json({ success: false, error: 'essayId e content são obrigatórios' });
-      const saved = await saveEssay({ essayId, userId: req.user.uid, topic: topic || 'Tema Livre', banca, content, score, feedback, criterios: typeof criterios === 'object' ? JSON.stringify(criterios) : criterios });
-      return res.status(200).json({ success: true, essay: saved });
-    } catch (e) {
-      return res.status(500).json({ success: false, error: e.message });
-    }
-  }
-
+  // 1.4 Redações (essays) — só leitura aqui. Correções são gravadas
+  // exclusivamente por /api/redacao, com a nota que a própria IA deu.
   if (action === 'get-essays') {
     if (!(await runRequireAuth(req, res))) return;
     try {
@@ -154,6 +259,8 @@ export default async function dataHandler(req, res) {
       return res.status(500).json({ success: false, error: e.message });
     }
   }
+
+  if (action) return res.status(400).json({ success: false, error: 'Ação não reconhecida.' });
 
   // 2. Painel de auditoria/estatísticas agregadas — exige sessão válida e
   //    NUNCA inclui conteúdo de redação de terceiros (só contadores).

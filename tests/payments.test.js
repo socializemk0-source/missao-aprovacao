@@ -2,11 +2,11 @@
 // (webhook, assinatura própria) + api/auth.js (downgrade cancela a
 // assinatura real). Banco mockado (fake-db.js) e requireAuth mockado
 // (fake-auth.js, convenção "TEST:<uid>") como no resto da suíte.
-// O cliente do Mercado Pago é injetado via deps.mpClient — nenhuma
+// O cliente da AbacatePay é injetado via deps.abacatePayClient — nenhuma
 // chamada de rede real acontece aqui.
 //
-// O Plano PRO é uma ASSINATURA RECORRENTE (R$ 29,90/mês, Mercado Pago
-// Preapproval), não um pagamento único.
+// O Plano PRO é uma ASSINATURA RECORRENTE (R$ 29,90/mês, AbacatePay
+// Subscriptions), não um pagamento único.
 
 import { test, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,37 +28,46 @@ const { default: webhookHandler } = await import('../api/payments/webhook.js');
 const { default: authHandler } = await import('../api/auth.js');
 
 const WEBHOOK_SECRET = 'segredo-webhook-teste';
-process.env.MERCADOPAGO_WEBHOOK_SECRET = WEBHOOK_SECRET;
+const PUBLIC_KEY = 'chave-publica-teste';
+process.env.ABACATEPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
+process.env.ABACATEPAY_WEBHOOK_PUBLIC_KEY = PUBLIC_KEY;
+process.env.ABACATEPAY_PRODUCT_ID = 'prod_pro_29_90';
 
 function authHeader(uid) {
   return { authorization: `Bearer TEST:${uid}` };
 }
 
-function signedWebhookHeaders({ dataId, ts = String(Math.floor(Date.now() / 1000)), requestId = 'req-1' }) {
-  const manifest = `id:${dataId};request-id:${requestId};ts:${ts};`;
-  const v1 = crypto.createHmac('sha256', WEBHOOK_SECRET).update(manifest).digest('hex');
-  return { 'x-signature': `ts=${ts},v1=${v1}`, 'x-request-id': requestId };
+function signBody(rawBody, key = PUBLIC_KEY) {
+  return crypto.createHmac('sha256', key).update(Buffer.from(rawBody, 'utf8')).digest('base64');
 }
 
-function fakeMpClient({ subscriptionsById = {}, authorizedPaymentsById = {}, subscriptionResponse } = {}) {
-  const calls = { createSubscription: [], getSubscription: [], cancelSubscription: [], getAuthorizedPayment: [] };
+function makeWebhookReq({ event, data }) {
+  const rawBody = JSON.stringify({ event, data });
+  return {
+    req: makeReq({
+      method: 'POST',
+      query: { webhookSecret: WEBHOOK_SECRET },
+      headers: { 'x-webhook-signature': signBody(rawBody) },
+    }),
+    deps: { rawBody },
+  };
+}
+
+function fakeAbacatePayClient({ customerId = 'cust_1', subscriptionId = 'bill_1', url = 'https://app.abacatepay.com/pay/bill_1' } = {}) {
+  const calls = { createCustomer: [], createSubscription: [], cancelSubscription: [] };
   return {
     calls,
+    createCustomer: async (args) => {
+      calls.createCustomer.push(args);
+      return { id: customerId };
+    },
     createSubscription: async (args) => {
       calls.createSubscription.push(args);
-      return subscriptionResponse || { id: 'sub_123', init_point: 'https://mercadopago.com/subscriptions/sub_123', status: 'pending' };
-    },
-    getSubscription: async (id) => {
-      calls.getSubscription.push(id);
-      return subscriptionsById[id];
+      return { id: subscriptionId, url };
     },
     cancelSubscription: async (id) => {
       calls.cancelSubscription.push(id);
-      return { id, status: 'cancelled' };
-    },
-    getAuthorizedPayment: async (id) => {
-      calls.getAuthorizedPayment.push(id);
-      return authorizedPaymentsById[id];
+      return { id, status: 'CANCELLED' };
     },
   };
 }
@@ -73,193 +82,231 @@ beforeEach(() => {
 // ---------------------------------------------------------------------
 
 test('checkout sem token → 401, não cria assinatura', async () => {
-  const mp = fakeMpClient();
+  const client = fakeAbacatePayClient();
   const req = makeReq({ body: {} });
   const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
+  await paymentsHandler(req, res, { abacatePayClient: client });
   assert.equal(res.statusCode, 401);
-  assert.equal(mp.calls.createSubscription.length, 0);
+  assert.equal(client.calls.createSubscription.length, 0);
 });
 
-test('checkout autenticado usa req.user.uid como external_reference, nunca um uid do body', async () => {
-  const mp = fakeMpClient();
+test('checkout autenticado usa req.user.uid como externalId, nunca um uid do body', async () => {
+  const client = fakeAbacatePayClient();
   const req = makeReq({
     body: { uid: 'user_B', userId: 'user_B' }, // tentativa de spoof — deve ser ignorada
     headers: authHeader('user_A'),
   });
   const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
+  await paymentsHandler(req, res, { abacatePayClient: client });
 
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.checkoutUrl, 'https://mercadopago.com/subscriptions/sub_123');
-  assert.equal(mp.calls.createSubscription.length, 1);
-  assert.equal(mp.calls.createSubscription[0].externalReference, 'user_A', 'external_reference deve ser sempre o autenticado, nunca o do body');
-  assert.equal(store.subscriptions.user_A.mpPreapprovalId, 'sub_123', 'salva o estado local (pending) já na criação');
-});
-
-test('checkout envia payer_email do usuário autenticado — o Mercado Pago rejeita a criação da assinatura sem ele', async () => {
-  const mp = fakeMpClient();
-  const req = makeReq({ body: {}, headers: authHeader('user_A') });
-  const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(mp.calls.createSubscription[0].payerEmail, 'user_A@test.local');
-});
-
-test('checkout constrói a notification_url apontando para /api/payments/webhook (a rota que a Vercel de fato serve)', async () => {
-  const mp = fakeMpClient();
-  process.env.APP_BASE_URL = 'https://missao-aprovacao-lemon.vercel.app';
-  const req = makeReq({ body: {}, headers: authHeader('user_A') });
-  const res = makeRes();
-  await paymentsHandler(req, res, { mpClient: mp });
-  delete process.env.APP_BASE_URL;
-
-  assert.equal(
-    mp.calls.createSubscription[0].notificationUrl,
-    'https://missao-aprovacao-lemon.vercel.app/api/payments/webhook'
-  );
-});
-
-// ---------------------------------------------------------------------
-// Webhook (api/payments/webhook.js) — assinatura obrigatória, sem auth de sessão
-// ---------------------------------------------------------------------
-
-test('[segurança] webhook sem assinatura válida → 401, plano NÃO é alterado', async () => {
-  const mp = fakeMpClient({
-    subscriptionsById: { sub_1: { id: 'sub_1', status: 'authorized', external_reference: 'user_A', auto_recurring: { transaction_amount: 29.9, currency_id: 'BRL' } } },
-  });
-  const req = makeReq({
-    method: 'POST',
-    query: { type: 'subscription_preapproval', 'data.id': 'sub_1' },
-    body: { type: 'subscription_preapproval', data: { id: 'sub_1' } },
-    headers: { 'x-signature': 'ts=123,v1=assinatura-forjada', 'x-request-id': 'req-1' },
-  });
-  const res = makeRes();
-  await webhookHandler(req, res, { mpClient: mp });
-
-  assert.equal(res.statusCode, 401);
-  assert.equal(mp.calls.getSubscription.length, 0, 'nunca deve nem consultar a assinatura sem assinatura válida');
-  assert.notEqual(store.users.user_A.plan, 'pro');
-});
-
-test('webhook subscription_preapproval com status "authorized" → usuário promovido a PRO', async () => {
-  const mp = fakeMpClient({
-    subscriptionsById: {
-      sub_42: { id: 'sub_42', status: 'authorized', external_reference: 'user_A', auto_recurring: { transaction_amount: 29.9, currency_id: 'BRL' } },
-    },
-  });
-  const req = makeReq({
-    method: 'POST',
-    query: { type: 'subscription_preapproval', 'data.id': 'sub_42' },
-    body: { type: 'subscription_preapproval', data: { id: 'sub_42' } },
-    headers: signedWebhookHeaders({ dataId: 'sub_42' }),
-  });
-  const res = makeRes();
-  await webhookHandler(req, res, { mpClient: mp });
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(store.users.user_A.plan, 'pro', 'assinatura autorizada deve liberar o PRO');
-  assert.equal(store.subscriptions.user_A.status, 'authorized');
-});
-
-test('webhook subscription_preapproval com status "pending" → é registrado, mas plano NÃO muda para pro', async () => {
-  const mp = fakeMpClient({
-    subscriptionsById: { sub_7: { id: 'sub_7', status: 'pending', external_reference: 'user_A', auto_recurring: { transaction_amount: 29.9, currency_id: 'BRL' } } },
-  });
-  const req = makeReq({
-    method: 'POST',
-    query: { type: 'subscription_preapproval', 'data.id': 'sub_7' },
-    body: { type: 'subscription_preapproval', data: { id: 'sub_7' } },
-    headers: signedWebhookHeaders({ dataId: 'sub_7' }),
-  });
-  const res = makeRes();
-  await webhookHandler(req, res, { mpClient: mp });
-
-  assert.equal(res.statusCode, 200);
-  assert.notEqual(store.users.user_A.plan, 'pro');
+  assert.equal(res.body.checkoutUrl, 'https://app.abacatepay.com/pay/bill_1');
+  assert.equal(client.calls.createSubscription.length, 1);
+  assert.equal(client.calls.createSubscription[0].externalId, 'user_A', 'externalId deve ser sempre o autenticado, nunca o do body');
+  assert.equal(client.calls.createSubscription[0].productId, 'prod_pro_29_90');
+  assert.equal(store.subscriptions.user_A.providerSubscriptionId, 'bill_1', 'salva o estado local (pending) já na criação');
   assert.equal(store.subscriptions.user_A.status, 'pending');
 });
 
-test('webhook subscription_preapproval com status "cancelled" → usuário revertido para o modo gratuito', async () => {
-  store.users.user_A.plan = 'pro';
-  store.subscriptions.user_A = { userId: 'user_A', mpPreapprovalId: 'sub_9', status: 'authorized' };
-  const mp = fakeMpClient({
-    subscriptionsById: { sub_9: { id: 'sub_9', status: 'cancelled', external_reference: 'user_A', auto_recurring: { transaction_amount: 29.9, currency_id: 'BRL' } } },
-  });
-  const req = makeReq({
-    method: 'POST',
-    query: { type: 'subscription_preapproval', 'data.id': 'sub_9' },
-    body: { type: 'subscription_preapproval', data: { id: 'sub_9' } },
-    headers: signedWebhookHeaders({ dataId: 'sub_9' }),
-  });
+test('checkout cria um customer na AbacatePay usando o e-mail autenticado', async () => {
+  const client = fakeAbacatePayClient();
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
   const res = makeRes();
-  await webhookHandler(req, res, { mpClient: mp });
+  await paymentsHandler(req, res, { abacatePayClient: client });
 
   assert.equal(res.statusCode, 200);
-  assert.equal(store.users.user_A.plan, 'free', 'cancelamento direto no Mercado Pago também precisa rebaixar o usuário');
+  assert.equal(client.calls.createCustomer.length, 1);
+  assert.equal(client.calls.createCustomer[0].email, 'user_A@test.local');
+  assert.equal(store.subscriptions.user_A.providerCustomerId, 'cust_1');
+});
+
+test('checkout reaproveita o customer já criado — nunca cria um customer duplicado na AbacatePay', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_ja_existente', status: 'none' };
+  const client = fakeAbacatePayClient();
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(client.calls.createCustomer.length, 0, 'não deve criar um customer novo se já existe um salvo');
+  assert.equal(client.calls.createSubscription[0].customerId, 'cust_ja_existente');
+});
+
+// P1 da revisão de 20/09/2026: "Novo checkout pode impedir o cancelamento
+// da assinatura original". upsertSubscription guarda UMA linha por
+// usuário — criar um segundo checkout sobrescrevia providerSubscriptionId,
+// perdendo pra sempre a referência da assinatura ativa original (que
+// continuava sendo cobrada, sem ninguém saber cancelar).
+test('checkout NÃO cria uma segunda assinatura quando já existe uma ativa — evita perder a referência da original', async () => {
+  store.subscriptions.user_A = {
+    userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_ORIGINAL_ATIVA', status: 'active',
+  };
+  const client = fakeAbacatePayClient({ subscriptionId: 'bill_NOVA_DUPLICADA' });
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 409);
+  assert.equal(client.calls.createSubscription.length, 0, 'não pode criar uma segunda assinatura na AbacatePay');
+  assert.equal(store.subscriptions.user_A.providerSubscriptionId, 'subs_ORIGINAL_ATIVA', 'a referência da assinatura ativa não pode ser perdida/sobrescrita');
+  assert.equal(store.subscriptions.user_A.status, 'active');
+});
+
+test('checkout com assinatura pending (tentativa anterior não confirmada) ainda pode criar um novo checkout', async () => {
+  store.subscriptions.user_A = {
+    userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pending_antigo', status: 'pending',
+  };
+  const client = fakeAbacatePayClient({ subscriptionId: 'bill_novo' });
+  const req = makeReq({ body: {}, headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(client.calls.createSubscription.length, 1);
+});
+
+test('checkout via GET é rejeitado (405) — o handler de pagamento nunca pode criar assinatura fora de POST', async () => {
+  const client = fakeAbacatePayClient();
+  const req = makeReq({ method: 'GET', headers: authHeader('user_A') });
+  const res = makeRes();
+  await paymentsHandler(req, res, { abacatePayClient: client });
+
+  assert.equal(res.statusCode, 405);
+  assert.equal(client.calls.createSubscription.length, 0);
+});
+
+// ---------------------------------------------------------------------
+// Webhook (api/payments/webhook.js) — segredo na query + assinatura HMAC
+// obrigatórios, sem auth de sessão
+// ---------------------------------------------------------------------
+
+test('[segurança] webhook sem o segredo correto na query string → 401, plano NÃO é alterado', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_1', status: 'pending' };
+  const rawBody = JSON.stringify({ event: 'subscription.completed', data: { subscription: { id: 'subs_1' } } });
+  const req = makeReq({
+    method: 'POST',
+    query: { webhookSecret: 'segredo-errado' },
+    headers: { 'x-webhook-signature': signBody(rawBody) },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, { rawBody });
+
+  assert.equal(res.statusCode, 401);
+  assert.notEqual(store.users.user_A?.plan, 'pro');
+});
+
+test('[segurança] webhook com segredo certo mas assinatura HMAC inválida → 401, plano NÃO é alterado', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_1', status: 'pending' };
+  const rawBody = JSON.stringify({ event: 'subscription.completed', data: { subscription: { id: 'subs_1' } } });
+  const req = makeReq({
+    method: 'POST',
+    query: { webhookSecret: WEBHOOK_SECRET },
+    headers: { 'x-webhook-signature': 'assinatura-forjada' },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, { rawBody });
+
+  assert.equal(res.statusCode, 401);
+  assert.notEqual(store.users.user_A?.plan, 'pro');
+});
+
+test('subscription.completed identificado pelo id da assinatura → usuário promovido a PRO', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_42', status: 'pending' };
+  const { req, deps } = makeWebhookReq({
+    event: 'subscription.completed',
+    data: { subscription: { id: 'subs_42', amount: 2990, currency: 'BRL' }, payment: { id: 'char_1', status: 'PAID', paidAmount: 2990 } },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.users.user_A.plan, 'pro', 'assinatura completada deve liberar o PRO');
+  assert.equal(store.subscriptions.user_A.status, 'active');
+  assert.equal(store.subscriptionPayments.length, 1);
+});
+
+test('subscription.completed identificado pelo id do customer (quando o evento não repete o id da assinatura provisória)', async () => {
+  // Estado logo após o checkout: só temos o id provisório (bill_...) salvo,
+  // mas o webhook já traz o id real da assinatura (subs_...) — a
+  // correlação precisa cair pro customerId.
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_99', providerSubscriptionId: 'bill_1', status: 'pending' };
+  const { req, deps } = makeWebhookReq({
+    event: 'subscription.completed',
+    data: { subscription: { id: 'subs_novo_77', amount: 2990, currency: 'BRL' }, customer: { id: 'cust_99' } },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.users.user_A.plan, 'pro');
+  assert.equal(store.subscriptions.user_A.providerSubscriptionId, 'subs_novo_77', 'deve substituir o id provisório pelo id real da assinatura');
+});
+
+test('subscription.completed sem nenhuma correlação possível → ignorado, sem erro e sem alterar plano', async () => {
+  const { req, deps } = makeWebhookReq({
+    event: 'subscription.completed',
+    data: { subscription: { id: 'subs_desconhecida' } },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ignored, true);
+});
+
+test('subscription.payment_failed → é registrado, mas plano NÃO muda para pro nem é revogado ainda', async () => {
+  store.users.user_A.plan = 'pro';
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_7', status: 'active' };
+  const { req, deps } = makeWebhookReq({
+    event: 'subscription.payment_failed',
+    data: { subscription: { id: 'subs_7' }, retryNumber: 1 },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.users.user_A.plan, 'pro', 'uma falha de cobrança isolada não revoga o PRO — só o evento cancelled revoga');
+  assert.equal(store.subscriptions.user_A.status, 'payment_failed');
+});
+
+test('subscription.cancelled → usuário revertido para o modo gratuito', async () => {
+  store.users.user_A.plan = 'pro';
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_9', status: 'active' };
+  const { req, deps } = makeWebhookReq({
+    event: 'subscription.cancelled',
+    data: { subscription: { id: 'subs_9', status: 'CANCELLED', cancelledDueTo: 'max_payment_retries_exceeded' } },
+  });
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.users.user_A.plan, 'free');
   assert.equal(store.subscriptions.user_A.status, 'cancelled');
 });
 
-test('webhook subscription_authorized_payment → grava histórico da cobrança recorrente', async () => {
-  store.subscriptions.user_A = { userId: 'user_A', mpPreapprovalId: 'sub_42', status: 'authorized' };
-  const mp = fakeMpClient({
-    authorizedPaymentsById: {
-      auth_pay_1: { id: 'auth_pay_1', preapproval_id: 'sub_42', status: 'approved', transaction_amount: 29.9, currency_id: 'BRL' },
-    },
-  });
-  const req = makeReq({
-    method: 'POST',
-    query: { type: 'subscription_authorized_payment', 'data.id': 'auth_pay_1' },
-    body: { type: 'subscription_authorized_payment', data: { id: 'auth_pay_1' } },
-    headers: signedWebhookHeaders({ dataId: 'auth_pay_1' }),
-  });
-  const res = makeRes();
-  await webhookHandler(req, res, { mpClient: mp });
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(store.subscriptionPayments.length, 1);
-  assert.equal(store.subscriptionPayments[0].userId, 'user_A');
-});
-
-test('[idempotência] a mesma cobrança recorrente reenviada duas vezes só processa uma vez', async () => {
-  store.subscriptions.user_A = { userId: 'user_A', mpPreapprovalId: 'sub_99', status: 'authorized' };
-  const mp = fakeMpClient({
-    authorizedPaymentsById: {
-      auth_pay_99: { id: 'auth_pay_99', preapproval_id: 'sub_99', status: 'approved', transaction_amount: 29.9, currency_id: 'BRL' },
-    },
-  });
+test('[idempotência] o mesmo pagamento de renovação reenviado duas vezes só processa uma vez', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_99', status: 'active' };
 
   for (let i = 0; i < 2; i++) {
-    const req = makeReq({
-      method: 'POST',
-      query: { type: 'subscription_authorized_payment', 'data.id': 'auth_pay_99' },
-      body: { type: 'subscription_authorized_payment', data: { id: 'auth_pay_99' } },
-      headers: signedWebhookHeaders({ dataId: 'auth_pay_99' }),
+    const { req, deps } = makeWebhookReq({
+      event: 'subscription.renewed',
+      data: { subscription: { id: 'subs_99', amount: 2990, currency: 'BRL' }, payment: { id: 'char_99', status: 'PAID', paidAmount: 2990 } },
     });
     const res = makeRes();
-    await webhookHandler(req, res, { mpClient: mp });
+    await webhookHandler(req, res, deps);
     assert.equal(res.statusCode, 200);
   }
 
-  assert.equal(store.subscriptionPayments.length, 1, 'não deve gravar a mesma cobrança duas vezes');
-  assert.equal(mp.calls.getAuthorizedPayment.length, 2, 'consulta a API do MP nas duas vezes (correto), mas só grava uma');
+  assert.equal(store.subscriptionPayments.length, 1, 'não deve gravar o mesmo pagamento duas vezes');
 });
 
-test('webhook de outro tópico (ex: merchant_order) é apenas confirmado, sem processar nada', async () => {
-  const mp = fakeMpClient();
-  const req = makeReq({
-    method: 'POST',
-    query: { type: 'merchant_order', 'data.id': 'mo_1' },
-    body: { type: 'merchant_order', data: { id: 'mo_1' } },
-    headers: signedWebhookHeaders({ dataId: 'mo_1' }),
-  });
+test('webhook de outro evento (ex: subscription.trial_started) é apenas confirmado, sem processar nada', async () => {
+  const { req, deps } = makeWebhookReq({ event: 'subscription.trial_started', data: {} });
   const res = makeRes();
-  await webhookHandler(req, res, { mpClient: mp });
+  await webhookHandler(req, res, deps);
 
   assert.equal(res.statusCode, 200);
-  assert.equal(mp.calls.getSubscription.length, 0);
-  assert.equal(mp.calls.getAuthorizedPayment.length, 0);
+  assert.equal(res.body.ignored, true);
 });
 
 // ---------------------------------------------------------------------
@@ -267,26 +314,26 @@ test('webhook de outro tópico (ex: merchant_order) é apenas confirmado, sem pr
 // verdade — senão o usuário continua sendo cobrado todo mês.
 // ---------------------------------------------------------------------
 
-test('downgrade-to-free com assinatura ativa cancela de verdade no Mercado Pago', async () => {
-  store.subscriptions.user_A = { userId: 'user_A', mpPreapprovalId: 'sub_1', status: 'authorized' };
-  const mp = fakeMpClient();
+test('downgrade-to-free com assinatura ativa cancela de verdade na AbacatePay', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'subs_1', status: 'active' };
+  const client = fakeAbacatePayClient();
   const req = makeReq({ body: { action: 'downgrade-to-free' }, headers: authHeader('user_A') });
   const res = makeRes();
-  await authHandler(req, res, { mpClient: mp });
+  await authHandler(req, res, { abacatePayClient: client });
 
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(mp.calls.cancelSubscription, ['sub_1']);
+  assert.deepEqual(client.calls.cancelSubscription, ['subs_1']);
   assert.equal(store.subscriptions.user_A.status, 'cancelled');
   assert.equal(store.users.user_A.plan, 'free');
 });
 
-test('downgrade-to-free sem assinatura ativa não tenta chamar o Mercado Pago', async () => {
-  const mp = fakeMpClient();
+test('downgrade-to-free sem assinatura ativa não tenta chamar a AbacatePay', async () => {
+  const client = fakeAbacatePayClient();
   const req = makeReq({ body: { action: 'downgrade-to-free' }, headers: authHeader('user_A') });
   const res = makeRes();
-  await authHandler(req, res, { mpClient: mp });
+  await authHandler(req, res, { abacatePayClient: client });
 
   assert.equal(res.statusCode, 200);
-  assert.equal(mp.calls.cancelSubscription.length, 0);
+  assert.equal(client.calls.cancelSubscription.length, 0);
   assert.equal(store.users.user_A.plan, 'free');
 });

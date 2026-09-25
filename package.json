@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node server.js",
     "build": "node -e \"console.log('Build complete')\"",
-    "lint": "node --check server.js api/redacao.js api/auth.js api/data.js middleware/requireAuth.js public/supabase-client.js src/db/schema.js src/db/index.js src/db/queries.js",
+    "lint": "node --check server.js api/redacao.js api/auth.js api/data.js api/payments.js api/payments/webhook.js middleware/requireAuth.js public/supabase-client.js src/db/schema.js src/db/index.js src/db/queries.js src/payments/abacatepay.js src/daily-missions.js src/player-stats.js src/game-snapshot.js",
     "test": "node --experimental-test-module-mocks --test tests/*.test.js",
     "start": "node server.js"
   },

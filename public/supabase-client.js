@@ -27,17 +27,45 @@ if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
   }
 }
 
-if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
+const isConfigured = Boolean(SUPABASE_CONFIG.url && SUPABASE_CONFIG.anonKey);
+if (!isConfigured) {
   console.error('[Supabase Client] SUPABASE_URL/SUPABASE_ANON_KEY ausentes — login e sincronização com a nuvem ficarão indisponíveis.');
 }
 
-export const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+// createClient('', '') lança "supabaseUrl is required" — e como este é um
+// module script sem try/catch em volta, isso derrubava a AVALIAÇÃO INTEIRA
+// deste módulo (nenhum export existiria, window.MissaoFirebase nunca
+// seria definido) sempre que a configuração do servidor faltasse. Sem
+// configuração, usamos um stub com a mesma forma de auth.* que todo o
+// resto deste arquivo já espera — cada chamador já trata `error` de
+// signUp/signInWithPassword/etc. como uma falha explícita (ver
+// registerUser/loginWithEmail), então isto vira uma mensagem clara de
+// "serviço indisponível" em vez de quebrar a página inteira.
+function createUnconfiguredSupabaseStub() {
+  const configError = { message: 'Serviço de contas indisponível no momento. Tente novamente mais tarde.' };
+  return {
+    auth: {
+      async getSession() { return { data: { session: null }, error: null }; },
+      onAuthStateChange() { return { data: { subscription: { unsubscribe() {} } } }; },
+      async signUp() { return { data: { user: null, session: null }, error: configError }; },
+      async signInWithPassword() { return { data: { user: null, session: null }, error: configError }; },
+      async signInWithOAuth() { return { data: null, error: configError }; },
+      async signOut() { return { error: null }; },
+      async resetPasswordForEmail() { return { data: null, error: configError }; },
+      async updateUser() { return { data: { user: null }, error: configError }; },
+    },
+  };
+}
+
+export const supabase = isConfigured
+  ? createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  : createUnconfiguredSupabaseStub();
 
 // -----------------------------------------------------------------------
 // Sessão e token de acesso
@@ -115,9 +143,28 @@ function persistUser(user) {
 // o caso de um login via OAuth por redirecionamento (ex.: Google): o
 // Supabase autentica a sessão sozinho ao carregar a página de volta, mas
 // sem isto a pessoa fica autenticada "por dentro" e o app nunca percebe.
+//
+// De propósito NÃO usa authFetch/getAccessToken aqui: essas funções chamam
+// supabase.auth.getSession(), e esta função roda de dentro do callback do
+// onAuthStateChange (subscribeAuth, mais abaixo) — chamar qualquer método
+// de supabase.auth de DENTRO desse callback é o deadlock documentado pelo
+// próprio Supabase (https://supabase.com/docs/guides/troubleshooting/why-is-my-supabase-api-call-not-returning-PGzXw0).
+// O `session` recebido como parâmetro já tem o access_token pronto, então
+// montamos a chamada autenticada na mão.
 async function hydrateSessionUser(session) {
+  const token = session?.access_token;
+  if (!token) return null;
   try {
-    const res = await authFetch('/api/auth?action=get-profile');
+    const res = await fetch('/api/auth?action=get-profile', {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      // Erro explícito: uma falha real do servidor NUNCA deve virar
+      // silenciosamente um perfil padrão gratuito persistido como se
+      // tivesse dado certo.
+      console.error('[Auth] Falha ao buscar perfil após autenticação:', res.status);
+      return null;
+    }
     const payload = await res.json().catch(() => ({}));
     const user = {
       uid: session.user.id,
@@ -128,7 +175,8 @@ async function hydrateSessionUser(session) {
     };
     persistUser(user);
     return user;
-  } catch (_) {
+  } catch (err) {
+    console.error('[Auth] Erro de rede ao buscar perfil após autenticação:', err.message);
     return null;
   }
 }
@@ -161,7 +209,12 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
     throw new Error('Este e-mail já está cadastrado. Faça login ou use "Esqueci minha senha".');
   }
   if (!data.session) {
-    throw new Error('Cadastro criado! Confirme seu e-mail e depois faça login para continuar.');
+    // Isto NÃO é uma falha — é o cadastro funcionando como esperado quando
+    // o projeto Supabase exige confirmação por e-mail. Antes isto era
+    // sinalizado lançando um Error, e o chamador (tico-account-form.js)
+    // mostrava QUALQUER exceção num alerta vermelho de erro — cadastro
+    // criado com sucesso aparecia com a mesma cor de uma falha real.
+    return { pendingConfirmation: true, email };
   }
 
   const res = await authFetch('/api/auth', {
@@ -178,6 +231,40 @@ export async function registerUser({ name, email, password, whatsapp, cidade }) 
   return user;
 }
 
+// Recuperação de senha — fluxo complementar ao cadastro/login: envia o
+// e-mail com o link de redefinição (o Supabase volta pra /entrar com um
+// token de recuperação no fragmento da URL; tico-account-form.js detecta
+// isso e chama updatePassword). Nunca revela se o e-mail existe ou não na
+// mensagem de sucesso (mesma política anti-enumeração do signUp).
+export async function sendPasswordReset(email) {
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    throw new Error('Informe um e-mail válido para receber o link de recuperação.');
+  }
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${window.location.origin}/entrar`,
+  });
+  if (error) {
+    throw new Error(error.message || 'Não foi possível enviar o e-mail de recuperação agora.');
+  }
+  return true;
+}
+
+// Define a nova senha DEPOIS que a pessoa já voltou pelo link do e-mail —
+// nesse momento o Supabase já estabeleceu uma sessão de recuperação
+// temporária a partir do token na URL (detectSessionInUrl: true), então
+// updateUser({password}) tem autoridade pra trocar a senha sem pedir a
+// senha antiga de novo.
+export async function updatePassword(newPassword) {
+  if (!newPassword || newPassword.length < 6) {
+    throw new Error('A nova senha deve ter pelo menos 6 caracteres.');
+  }
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) {
+    throw new Error(error.message || 'Não foi possível atualizar sua senha agora.');
+  }
+  return true;
+}
+
 export async function loginWithEmail(email, password) {
   if (!email || !password) {
     throw new Error('E-mail e senha são obrigatórios.');
@@ -189,6 +276,11 @@ export async function loginWithEmail(email, password) {
   }
 
   const res = await authFetch('/api/auth?action=get-profile');
+  if (!res.ok) {
+    // Login no Supabase funcionou, mas buscar o perfil falhou de verdade —
+    // não finge sucesso com um perfil padrão gratuito inventado na hora.
+    throw new Error('Login feito, mas não foi possível carregar seu perfil agora. Tente novamente em instantes.');
+  }
   const payload = await res.json().catch(() => ({}));
 
   const user = {
@@ -280,7 +372,7 @@ export function subscribeAuth(callback) {
 // localStorage é só otimização de UX e nunca decide autorização real.
 // -----------------------------------------------------------------------
 
-// Só existe um jeito de virar PRO: pagar via Mercado Pago. Cria a
+// Só existe um jeito de virar PRO: pagar via AbacatePay. Cria a
 // preferência de checkout autenticada (o servidor usa req.user.uid — o
 // que a gente manda aqui não importa) e redireciona para lá. O plano só
 // muda de verdade quando o webhook confirmar o pagamento no servidor.
@@ -308,7 +400,7 @@ export async function refreshPlanFromServer() {
 
 export async function upgradeUserPlan(newPlan = 'pro') {
   if (newPlan === 'pro') {
-    return startProCheckout(); // navega para o Mercado Pago — não retorna
+    return startProCheckout(); // navega para a AbacatePay — não retorna
   }
 
   const res = await authFetch('/api/auth', {
@@ -371,10 +463,11 @@ export async function syncUserStats(_userId, stats) {
   } catch (_) {}
 }
 
-export async function syncMissionProgress(_userId, missionId, score, total) {
-  try {
-    await callApiData('save-mission', { dateStr: new Date().toISOString().split('T')[0], missionId, progress: score, target: total, completed: 1 });
-  } catch (_) {}
+// O botão "sincronizar" do perfil chamava isto com ids de FASES da trilha,
+// gravando-as como se fossem missões diárias (o servidor agora recusa).
+// O progresso da trilha vai para a nuvem inteiro via startGameCloudSync.
+export async function syncMissionProgress() {
+  uploadGameSnapshot();
 }
 
 export async function loadUserCloudProgress(_userId) {
@@ -395,7 +488,15 @@ export async function getUserDetailedProgress(_userId) {
       const total = p.totalQuestionsAnswered || 0;
       const correct = p.correctAnswers || 0;
       return {
-        totalCompleted: Array.isArray(p.completedPhases) ? p.completedPhases.length : 0,
+        totalCompleted: (() => {
+          // A coluna é texto (JSON) no banco — antes só contava se já viesse array.
+          try {
+            const phases = typeof p.completedPhases === 'string' ? JSON.parse(p.completedPhases) : p.completedPhases;
+            return Array.isArray(phases) ? phases.length : 0;
+          } catch (_) {
+            return 0;
+          }
+        })(),
         totalQuestionsAnswered: total,
         totalCorrect: correct,
         accuracy: total > 0 ? Math.round((correct / total) * 100) : 100,
@@ -447,12 +548,19 @@ export async function getUserDailyProgress(userId, dateStr = new Date().toISOStr
     const progressMap = {};
     const completed = [];
     const claimed = [];
+    let bonusClaimed = false;
+    const bonusId = `daily-${dateStr}-bonus`;
     missions.forEach((m) => {
+      // O baú é gravado como uma linha própria — não conta como missão.
+      if (m.missionId === bonusId) {
+        bonusClaimed = Boolean(m.claimed);
+        return;
+      }
       progressMap[m.missionId] = m.progress;
       if (m.completed) completed.push(m.missionId);
       if (m.claimed) claimed.push(m.missionId);
     });
-    return { date: dateStr, progressMap, completed, claimed, bonusClaimed: false };
+    return { date: dateStr, progressMap, completed, claimed, bonusClaimed };
   } catch (_) {
     return { date: dateStr, progressMap: {}, completed: [], claimed: [], bonusClaimed: false };
   }
@@ -470,48 +578,31 @@ export async function updateDailyMissionProgress(_userId, dateStr, missionId, in
   return prog;
 }
 
-export async function claimDailyMissionReward(userId, dateStr, missionId, xpReward = 50) {
-  const prog = await getUserDailyProgress(userId, dateStr);
-  try {
-    await callApiData('save-mission', { dateStr, missionId, progress: prog.progressMap[missionId] || 1, target: 1, completed: 1, claimed: 1 });
-  } catch (_) {}
-  if (!prog.claimed.includes(missionId)) prog.claimed.push(missionId);
-
-  const cur = getCurrentUser();
-  if (cur) {
-    const newXp = (cur.xp || 0) + xpReward;
-    await syncUserStats(cur.uid, { xp: newXp });
-  }
-  return prog;
+// Resgates são concedidos pelo SERVIDOR (valor definido lá, uma única vez
+// por missão/dia). O cliente só pede e atualiza o cache com o que voltar.
+function applyServerUser(payload) {
+  if (!payload?.user) return;
+  const current = getCurrentUser();
+  if (current) persistUser({ ...current, ...payload.user });
 }
 
-export async function claimDailyBonusChest(_userId, _dateStr, bonusXp = 100) {
-  const cur = getCurrentUser();
-  if (cur) {
-    const newXp = (cur.xp || 0) + bonusXp;
-    await syncUserStats(cur.uid, { xp: newXp });
-  }
+export async function claimDailyMissionReward(userId, dateStr, missionId) {
+  const payload = await callApiData('claim-mission', { dateStr, missionId });
+  if (!payload?.success) return null;
+  applyServerUser(payload);
+  return getUserDailyProgress(userId, dateStr);
+}
+
+export async function claimDailyBonusChest(_userId, dateStr = new Date().toISOString().split('T')[0]) {
+  const payload = await callApiData('claim-chest', { dateStr });
+  if (!payload?.success) return false;
+  applyServerUser(payload);
   return true;
 }
 
 // -----------------------------------------------------------------------
 // Redações
 // -----------------------------------------------------------------------
-
-export async function saveUserEssay(_userId, essayData) {
-  const essayId = essayData.id || `redacao_${Date.now()}`;
-  try {
-    await callApiData('save-essay', {
-      essayId,
-      topic: essayData.tema || 'Tema de Redação',
-      banca: essayData.banca,
-      content: essayData.texto || '',
-      score: essayData.nota || 0,
-      feedback: essayData.feedback || '',
-    });
-  } catch (_) {}
-  return essayId;
-}
 
 export async function getUserEssays(_userId) {
   try {
@@ -594,6 +685,8 @@ const SupabaseApplet = {
   authFetch,
   registerUser,
   loginWithEmail,
+  sendPasswordReset,
+  updatePassword,
   getCurrentUser,
   upgradeUserPlan,
   startProCheckout,
@@ -616,7 +709,6 @@ const SupabaseApplet = {
   updateDailyMissionProgress,
   claimDailyMissionReward,
   claimDailyBonusChest,
-  saveUserEssay,
   getUserEssays,
   saveUserPreferredBanca,
   getUserPreferredBanca,
@@ -653,6 +745,82 @@ if (typeof window !== 'undefined') {
   } catch (_) {
     // Sem sessão válida ainda (ou servidor indisponível) — segue normal.
   }
+})();
+
+// -----------------------------------------------------------------------
+// Progresso da trilha na nuvem
+//
+// O jogo (bundle) guarda o estado inteiro em localStorage, na chave
+// 'missao-aprovacao-v1:<uid>', e só o lê ao montar. O jogo também valida
+// esse estado com rigor (XP == soma dos acertos), então nada é mesclado
+// campo a campo: o servidor guarda o snapshot inteiro e nunca aceita um
+// com menos XP (o XP do jogo só cresce). Ao carregar, se a nuvem estiver
+// à frente deste aparelho, ela é adotada — o estado local vai para
+// '<chave>:backup' antes — e a página recarrega para o jogo relê-la.
+// -----------------------------------------------------------------------
+
+const GAME_ROUTES = ['/jogar', '/redacao', '/missoes', '/ranking', '/dados'];
+let gameSync = null; // { key, lastUploaded }
+
+function snapshotXp(raw) {
+  try {
+    const xp = JSON.parse(raw)?.xp;
+    return Number.isSafeInteger(xp) ? xp : -1;
+  } catch (_) {
+    return -1;
+  }
+}
+
+function uploadGameSnapshot({ keepalive = false } = {}) {
+  if (!gameSync) return;
+  const current = localStorage.getItem(gameSync.key);
+  if (!current || current === gameSync.lastUploaded) return;
+  gameSync.lastUploaded = current;
+  authFetch('/api/data', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'save-game', state: current }),
+    keepalive,
+  })
+    .then((res) => res.json())
+    .then((payload) => { if (!payload?.success && gameSync) gameSync.lastUploaded = null; })
+    .catch(() => { if (gameSync) gameSync.lastUploaded = null; });
+}
+
+(async function startGameCloudSync() {
+  const user = getCurrentUser();
+  if (!isConfigured || !user || user.isGuest || !user.uid) return;
+  const key = `missao-aprovacao-v1:${user.uid}`;
+
+  let cloud;
+  try {
+    const payload = await callApiData('get-game', {}, 'GET');
+    if (!payload?.success) return; // sem sessão válida ou servidor fora — não sincroniza às cegas
+    cloud = payload.snapshot;
+  } catch (_) {
+    return;
+  }
+
+  const local = localStorage.getItem(key);
+  // Marca por XP: se o jogo recusar o snapshot adotado (e recomeçar do
+  // zero), a mesma nuvem não é readotada em loop nesta aba.
+  const restoredFlag = `tico_game_restored:${user.uid}`;
+  if (cloud && cloud.xp > snapshotXp(local) && cloud.state !== local
+      && sessionStorage.getItem(restoredFlag) !== String(cloud.xp)) {
+    if (local !== null) localStorage.setItem(`${key}:backup`, local);
+    localStorage.setItem(key, cloud.state);
+    sessionStorage.setItem(restoredFlag, String(cloud.xp));
+    if (GAME_ROUTES.some((route) => window.location.pathname.startsWith(route))) {
+      window.location.reload();
+      return;
+    }
+  }
+
+  gameSync = { key, lastUploaded: cloud?.state ?? null };
+  uploadGameSnapshot();
+  setInterval(uploadGameSnapshot, 20000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') uploadGameSnapshot({ keepalive: true });
+  });
 })();
 
 export default SupabaseApplet;

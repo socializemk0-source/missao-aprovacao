@@ -140,6 +140,62 @@ test('Plano Grátis: uma correção de mais de 7 dias atrás não conta para o l
   assert.equal(res.statusCode, 200, `esperava 200, recebeu ${res.statusCode} (${JSON.stringify(body)})`);
 });
 
+// P1 da revisão de 20/09/2026: a cota era só CONTADA antes da chamada à
+// IA, nunca reservada — duas requisições simultâneas do mesmo usuário
+// grátis viam "0 correções" e as duas passavam.
+function postEssayWithSlowAi(uid, { ok = true } = {}) {
+  ipCounter += 1;
+  const send = mock.fn(async () => {
+    await new Promise((r) => setTimeout(r, 30));
+    return ok ? fakeOpenAiResponse() : { ok: false, status: 500, json: async () => ({}) };
+  });
+  const req = makeReq({
+    method: 'POST',
+    body: { topicId: TOPIC_ID, bank: BANK, text: STUDENT_TEXT },
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer TEST:${uid}`,
+      'x-forwarded-for': `198.51.100.${ipCounter}`,
+    },
+  });
+  const res = makeRes();
+  return redacaoHandler(req, res, { send }).then(() => ({ res, body: JSON.parse(res.body), send }));
+}
+
+test('Plano Grátis: duas correções SIMULTÂNEAS — só uma passa, a OpenAI é chamada uma única vez', async () => {
+  const [a, b] = await Promise.all([postEssayWithSlowAi('user_A'), postEssayWithSlowAi('user_A')]);
+
+  const statuses = [a.res.statusCode, b.res.statusCode].sort();
+  assert.deepEqual(statuses, [200, 403], `esperava uma aceita e uma bloqueada, recebeu ${statuses}`);
+  assert.equal(a.send.mock.calls.length + b.send.mock.calls.length, 1, 'a OpenAI só pode ser chamada para a requisição que reservou a vaga');
+});
+
+test('Plano Grátis: falha da IA libera a vaga — a próxima tentativa ainda pode corrigir', async () => {
+  const failed = await postEssayWithSlowAi('user_A', { ok: false });
+  assert.notEqual(failed.res.statusCode, 200);
+
+  const retry = await postEssayWithSlowAi('user_A');
+  assert.equal(retry.res.statusCode, 200, `uma correção que falhou não pode consumir a cota (${JSON.stringify(retry.body)})`);
+});
+
+test('a correção é gravada ANTES da resposta terminar (sem gravação solta, que se perde em serverless)', async () => {
+  store.__essayWriteDelayMs = 40;
+  const { res } = await postEssay('user_A');
+  assert.equal(res.statusCode, 200);
+
+  const saved = (store.essays.user_A || []).find((e) => e.feedback);
+  assert.ok(saved, 'quando o handler retorna, a correção já precisa estar persistida com o feedback');
+  assert.equal(saved.score, 75);
+});
+
+test('Plano PRO: a correção também é gravada antes da resposta terminar', async () => {
+  store.users.user_A.plan = 'pro';
+  store.__essayWriteDelayMs = 40;
+  const { res } = await postEssay('user_A');
+  assert.equal(res.statusCode, 200);
+  assert.ok((store.essays.user_A || []).some((e) => e.feedback), 'correção do PRO também precisa estar persistida');
+});
+
 test('GET /api/redacao (consulta de bancas/temas) continua público, sem exigir login', async () => {
   const req = makeReq({ method: 'GET', headers: {} });
   const res = makeRes();

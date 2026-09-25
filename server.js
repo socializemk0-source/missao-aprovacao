@@ -35,7 +35,9 @@ app.use((req, res, next) => {
 });
 
 // 2. Proteção de Body com limite de tamanho rigoroso (bloqueia DoS por exaustão de memória)
-app.use(express.json({ limit: '256kb' }));
+// `verify` guarda os bytes brutos em req.rawBody — o webhook da AbacatePay
+// assina o corpo bruto (HMAC), não um JSON re-serializado por nós.
+app.use(express.json({ limit: '256kb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
 // 3. Middleware de captura de erros de parsing JSON (evita crash do Express em JSONs malformados)
@@ -111,8 +113,8 @@ app.use('/api/data', apiGeneralLimiter, (req, res) => {
   dataHandler(req, res);
 });
 
-// Pagamentos (Mercado Pago / Checkout Pro) — criação de preferência (autenticada)
-// e webhook de confirmação (público, protegido por assinatura HMAC própria)
+// Pagamentos (AbacatePay) — criação de checkout de assinatura (autenticada)
+// e webhook de confirmação (público, protegido por segredo + assinatura HMAC própria)
 app.post('/api/payments/webhook', apiGeneralLimiter, (req, res) => {
   paymentsWebhookHandler(req, res);
 });

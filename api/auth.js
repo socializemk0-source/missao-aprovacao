@@ -1,5 +1,5 @@
 import { requireAuth } from '../middleware/requireAuth.js';
-import { createMercadoPagoClient } from '../src/payments/mercadopago.js';
+import { createAbacatePayClient } from '../src/payments/abacatepay.js';
 import {
   getOrCreateUser,
   getUserByUid,
@@ -131,15 +131,15 @@ export default async function authHandler(req, res, deps = {}) {
     // ------------------------------------------------------------------------
     // DOWNGRADE PARA O PLANO GRÁTIS (autosserviço, sempre a própria conta)
     //
-    // Virar PRO NUNCA passa mais por aqui: só o webhook do Mercado Pago
-    // (api/payments/webhook.js), depois de confirmar uma assinatura
-    // autorizada de verdade na API do Mercado Pago, pode setar plan='pro'.
-    // Isso fecha o HIGH-1 da auditoria (qualquer usuário logado conseguia
+    // Virar PRO NUNCA passa mais por aqui: só o webhook da AbacatePay
+    // (api/payments/webhook.js), depois de confirmar um pagamento de
+    // verdade (assinatura HMAC + segredo), pode setar plan='pro'. Isso
+    // fecha o HIGH-1 da auditoria (qualquer usuário logado conseguia
     // se autopromover a PRO sem pagar nada).
     //
     // O Plano PRO é uma assinatura RECORRENTE (R$ 29,90/mês) — por isso,
     // se o usuário tiver uma assinatura ativa, o downgrade precisa
-    // CANCELAR ela de verdade no Mercado Pago primeiro. Sem isso, o
+    // CANCELAR ela de verdade na AbacatePay primeiro. Sem isso, o
     // usuário "vira grátis" só no nosso banco, mas continua sendo
     // cobrado todo mês.
     // ------------------------------------------------------------------------
@@ -149,24 +149,25 @@ export default async function authHandler(req, res, deps = {}) {
       const { plan } = body;
       if (plan === 'pro') {
         return res.status(403).json({
-          error: 'A ativação do Plano PRO só é confirmada após uma assinatura aprovada. Use o checkout do Mercado Pago.',
+          error: 'A ativação do Plano PRO só é confirmada após uma assinatura aprovada. Use o checkout de pagamento.',
         });
       }
 
       const targetUid = req.user.uid;
 
       const subscription = await getSubscriptionByUserId(targetUid);
-      if (subscription?.mpPreapprovalId && subscription.status === 'authorized') {
+      if (subscription?.providerSubscriptionId && subscription.status === 'active') {
         try {
-          const mpClient = deps.mpClient || createMercadoPagoClient();
-          await mpClient.cancelSubscription(subscription.mpPreapprovalId);
+          const client = deps.abacatePayClient || createAbacatePayClient();
+          await client.cancelSubscription(subscription.providerSubscriptionId);
           await upsertSubscription({
             userId: targetUid,
-            mpPreapprovalId: subscription.mpPreapprovalId,
+            providerCustomerId: subscription.providerCustomerId,
+            providerSubscriptionId: subscription.providerSubscriptionId,
             status: 'cancelled',
           });
         } catch (err) {
-          console.error('[Auth Server] Falha ao cancelar assinatura no Mercado Pago:', err.message);
+          console.error('[Auth Server] Falha ao cancelar assinatura na AbacatePay:', err.message);
           return res.status(502).json({
             error: 'Não foi possível cancelar sua assinatura agora. Tente novamente em instantes.',
           });
@@ -260,21 +261,42 @@ export default async function authHandler(req, res, deps = {}) {
 
     // ------------------------------------------------------------------------
     // ATUALIZAÇÃO DE PERFIL — sempre o do próprio chamador autenticado.
+    //
+    // PARCIAL de propósito: só entram no update os campos que o chamador
+    // realmente mandou. Ex.: trocar só a banca preferida (preferredBanca)
+    // não pode apagar bio/avatar/cidade/telefone já preenchidos — por
+    // isso nunca inventamos um default para um campo ausente aqui; quem
+    // decide "ausente vira default" é upsertProfile, e só no INSERT.
     // ------------------------------------------------------------------------
     if (action === 'update-profile') {
       if (!(await runRequireAuth(req, res))) return;
 
       const { fullName, name, bio, avatarUrl, photoUrl, targetExam, preferredBanca, city, phone, whatsapp } = body;
 
-      const updated = await upsertProfile(req.user.uid, {
-        fullName: (fullName || name || '').trim() || 'Estudante Concurseiro',
-        bio: typeof bio === 'string' ? bio.slice(0, 500) : '',
-        avatarUrl: typeof avatarUrl === 'string' ? avatarUrl : (photoUrl || ''),
-        targetExam: typeof targetExam === 'string' ? targetExam : 'Polícia Federal',
-        preferredBanca: typeof preferredBanca === 'string' ? preferredBanca : 'Cebraspe',
-        city: typeof city === 'string' ? city : 'Brasil',
-        phone: typeof phone === 'string' ? phone : (whatsapp || ''),
-      });
+      const fields = {};
+
+      const resolvedFullName = typeof fullName === 'string' ? fullName : (typeof name === 'string' ? name : undefined);
+      if (resolvedFullName !== undefined) {
+        const trimmed = resolvedFullName.trim();
+        if (!trimmed) {
+          return res.status(400).json({ error: 'O nome não pode ficar vazio.' });
+        }
+        fields.fullName = trimmed;
+      }
+      if (typeof bio === 'string') fields.bio = bio.slice(0, 500);
+      const resolvedAvatar = typeof avatarUrl === 'string' ? avatarUrl : (typeof photoUrl === 'string' ? photoUrl : undefined);
+      if (resolvedAvatar !== undefined) fields.avatarUrl = resolvedAvatar;
+      if (typeof targetExam === 'string') fields.targetExam = targetExam;
+      if (typeof preferredBanca === 'string') fields.preferredBanca = preferredBanca;
+      if (typeof city === 'string') fields.city = city;
+      const resolvedPhone = typeof phone === 'string' ? phone : (typeof whatsapp === 'string' ? whatsapp : undefined);
+      if (resolvedPhone !== undefined) fields.phone = resolvedPhone;
+
+      if (Object.keys(fields).length === 0) {
+        return res.status(400).json({ error: 'Nenhum campo válido para atualizar foi enviado.' });
+      }
+
+      const updated = await upsertProfile(req.user.uid, fields);
 
       return res.status(200).json({
         success: true,

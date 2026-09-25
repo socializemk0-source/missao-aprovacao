@@ -30,8 +30,24 @@
     return { wrapper, input };
   }
 
+  // Confirma no próprio Supabase que a sessão em cache ainda vale antes de
+  // usá-la pra decidir qualquer coisa. Cache local sobrevive a um token
+  // expirado/revogado — sem checar de verdade, alguém nessa situação era
+  // mandado direto pra /jogar e só descobria que não estava mais logado
+  // quando a primeira chamada autenticada lá dentro desse 401. Chamada
+  // direta em window.supabase (nunca de dentro de um onAuthStateChange:
+  // supabase-client.js já evita isso na hidratação — ver hydrateSessionUser).
+  function cachedSessionStillValid() {
+    if (!window.supabase || typeof window.supabase.auth?.getSession !== 'function') {
+      return Promise.resolve(false);
+    }
+    return window.supabase.auth.getSession()
+      .then(({ data }) => Boolean(data?.session?.user))
+      .catch(() => false);
+  }
+
   function enhance(card) {
-    if (card.dataset.ticoAccountReady === 'true') return;
+    if (card.dataset.ticoAccountReady === 'true' || card.dataset.ticoAccountChecking === 'true') return;
 
     // Quem já está logado (ex.: acabou de voltar do login por Google, ou
     // simplesmente ainda tem a sessão de antes) não deveria ver o
@@ -44,14 +60,111 @@
       currentUser = JSON.parse(localStorage.getItem('missao_aprovacao_auth_user') || 'null');
     } catch (_) {}
     if (currentUser && !currentUser.isGuest) {
-      window.location.href = '/jogar';
+      card.dataset.ticoAccountChecking = 'true';
+      cachedSessionStillValid().then((valid) => {
+        delete card.dataset.ticoAccountChecking;
+        if (valid) {
+          window.location.href = '/jogar';
+          return;
+        }
+        // Sessão em cache não é mais válida — não redireciona às cegas.
+        // Limpa o cache velho e deixa o formulário de entrar/cadastrar aparecer.
+        try {
+          localStorage.removeItem('missao_aprovacao_auth_user');
+          localStorage.removeItem('missao_aprovacao_user_profile');
+        } catch (_) {}
+        buildForm(card);
+      });
       return;
     }
+
+    buildForm(card);
+  }
+
+  // Depois de clicar no link de "Esqueci minha senha" do e-mail, o Supabase
+  // traz a pessoa de volta pra /entrar com um token de recuperação no
+  // FRAGMENTO da URL (#access_token=...&type=recovery...) — checável na
+  // hora, sem depender de nenhum módulo assíncrono ainda estar pronto.
+  function isPasswordRecoveryReturn() {
+    return window.location.hash.includes('type=recovery');
+  }
+
+  function buildRecoveryForm(card, notice, fieldset) {
+    notice.textContent = 'Defina sua nova senha para continuar.';
+    fieldset.innerHTML = '';
+
+    const { wrapper: pwWrapper, input: newPwInput } = makeField('Nova senha', {
+      type: 'password', placeholder: 'Mínimo 6 caracteres', 'aria-label': 'Nova senha',
+    });
+    const { wrapper: pw2Wrapper, input: confirmPwInput } = makeField('Confirme a nova senha', {
+      type: 'password', placeholder: 'Repita a nova senha', 'aria-label': 'Confirmar nova senha',
+    });
+    fieldset.appendChild(pwWrapper);
+    fieldset.appendChild(pw2Wrapper);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'account-submit-btn';
+    btn.textContent = 'Salvar nova senha';
+    fieldset.appendChild(btn);
+
+    let alertBox = null;
+    function showAlert(kind, message) {
+      if (!alertBox) {
+        alertBox = document.createElement('div');
+        btn.insertAdjacentElement('afterend', alertBox);
+      }
+      alertBox.className = kind === 'error' ? 'account-alert-error' : 'account-alert-success';
+      alertBox.textContent = message;
+    }
+
+    async function handleSave() {
+      if (!window.MissaoFirebase) {
+        showAlert('error', 'Ainda carregando. Tente de novo em um instante.');
+        return;
+      }
+      if (newPwInput.value !== confirmPwInput.value) {
+        showAlert('error', 'As senhas não coincidem.');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Salvando...';
+      try {
+        await window.MissaoFirebase.updatePassword(newPwInput.value);
+        // Limpa o token da URL pra não tentar de novo se a pessoa recarregar.
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+        showAlert('success', 'Senha atualizada! Faça login com sua nova senha.');
+        btn.remove();
+        pwWrapper.remove();
+        pw2Wrapper.remove();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Salvar nova senha';
+        showAlert('error', err.message || 'Não foi possível atualizar sua senha agora.');
+      }
+    }
+    btn.addEventListener('click', handleSave);
+    [newPwInput, confirmPwInput].forEach((input) => {
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); handleSave(); } });
+    });
+  }
+
+  function buildForm(card) {
+    if (card.dataset.ticoAccountReady === 'true') return;
 
     const notice = card.querySelector('#preview-notice');
     const fieldset = card.querySelector('fieldset[disabled]');
     if (!notice || !fieldset) return;
     card.dataset.ticoAccountReady = 'true';
+
+    const soonBadge = card.querySelector('.account-soon');
+    if (soonBadge) soonBadge.remove();
+    fieldset.disabled = false;
+
+    if (isPasswordRecoveryReturn()) {
+      buildRecoveryForm(card, notice, fieldset);
+      return;
+    }
 
     const signup = isSignupMode();
 
@@ -66,16 +179,14 @@
       ? 'Seus dados ficam seguros — usados só para acompanhar seu progresso e liberar o Plano PRO quando você assinar.'
       : 'Entre com a conta que você já criou.';
 
-    const soonBadge = card.querySelector('.account-soon');
-    if (soonBadge) soonBadge.remove();
-
-    fieldset.disabled = false;
     originalInputs.forEach((input) => {
       input.disabled = false;
       const label = input.getAttribute('aria-label') || '';
       input.setAttribute('aria-label', label.replace(/\s*—\s*cadastro em breve/i, ''));
     });
-    if (passwordInput) passwordInput.placeholder = 'Crie uma senha (mínimo 6 caracteres)';
+    if (passwordInput) {
+      passwordInput.placeholder = signup ? 'Crie uma senha (mínimo 6 caracteres)' : 'Sua senha';
+    }
 
     let whatsappInput = null;
     let cidadeInput = null;
@@ -163,13 +274,22 @@
       newBtn.textContent = signup ? 'Criando sua conta...' : 'Entrando...';
       try {
         if (signup) {
-          await window.MissaoFirebase.registerUser({
+          const result = await window.MissaoFirebase.registerUser({
             name: nameInput.value.trim(),
             email: emailInput.value.trim(),
             password: passwordInput.value,
             whatsapp: whatsappInput.value.trim(),
             cidade: cidadeInput.value.trim(),
           });
+          if (result && result.pendingConfirmation) {
+            // Isto É sucesso — o cadastro foi criado, só falta confirmar o
+            // e-mail. Antes isso vinha como uma exceção e caía no catch
+            // abaixo, mostrando a mesma cor de erro de uma falha real.
+            newBtn.disabled = false;
+            newBtn.textContent = idleLabel;
+            showAlert('success', `Cadastro criado! Enviamos um link de confirmação para ${result.email}. Confirme seu e-mail e depois entre com sua senha.`);
+            return;
+          }
         } else {
           await window.MissaoFirebase.loginWithEmail(emailInput.value.trim(), passwordInput.value);
         }
@@ -188,6 +308,36 @@
         if (e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
       });
     });
+
+    if (!signup) {
+      const forgotLink = document.createElement('button');
+      forgotLink.type = 'button';
+      forgotLink.className = 'account-forgot-link';
+      forgotLink.textContent = 'Esqueci minha senha';
+      newBtn.insertAdjacentElement('afterend', forgotLink);
+
+      forgotLink.addEventListener('click', async () => {
+        const email = emailInput.value.trim();
+        if (!email) {
+          showAlert('error', 'Informe seu e-mail no campo acima e clique em "Esqueci minha senha" de novo.');
+          emailInput.focus();
+          return;
+        }
+        if (!window.MissaoFirebase) {
+          showAlert('error', 'Ainda carregando. Tente de novo em um instante.');
+          return;
+        }
+        forgotLink.disabled = true;
+        try {
+          await window.MissaoFirebase.sendPasswordReset(email);
+          showAlert('success', `Enviamos um link de recuperação para ${email}. Verifique sua caixa de entrada (e o spam).`);
+        } catch (err) {
+          showAlert('error', err.message || 'Não foi possível enviar o e-mail de recuperação agora.');
+        } finally {
+          forgotLink.disabled = false;
+        }
+      });
+    }
   }
 
   function tryEnhanceAll() {
