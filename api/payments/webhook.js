@@ -8,7 +8,10 @@ import {
   upsertSubscription,
   getSubscriptionPaymentByProviderPaymentId,
   recordSubscriptionPayment,
+  grantProPass,
+  revokeProPass,
 } from '../../src/db/queries.js';
+import { passForProductId } from '../../src/plan.js';
 
 // Rótulo exibido no perfil, a partir do que a AbacatePay de fato cobrou
 // (valor em centavos + frequência da assinatura). Ex.: "R$ 239,90/ano".
@@ -187,6 +190,57 @@ export default async function webhookHandler(req, res, deps = {}) {
       await setPlan(row.userId, 'free');
       console.log(`[Payments] Assinatura cancelada (${data?.subscription?.cancelledDueTo || 'manual'}) — usuário ${row.userId} revertido para o modo gratuito.`);
       return res.status(200).json({ success: true });
+    }
+
+    // Passe PRO (PIX avulso, ABACATEPAY_BILLING_MODE=pass). A duração vem
+    // do produto pago, e só de produtos que nós configuramos como passe.
+    if (event === 'checkout.completed' || event === 'checkout.refunded') {
+      const checkout = data?.checkout;
+      const pass = passForProductId(checkout?.items?.[0]?.id);
+      if (!checkout?.id || !pass) {
+        console.warn(`[Payments Webhook] ${event} de um produto que não é passe PRO — ignorado:`, JSON.stringify(data));
+        return res.status(200).json({ success: true, ignored: true });
+      }
+      if (event === 'checkout.completed' && checkout.status !== 'PAID') {
+        return res.status(200).json({ success: true, ignored: true });
+      }
+
+      const row = await resolveSubscriptionRow(data);
+      if (!row) {
+        console.warn(`[Payments Webhook] ${event} sem usuário correspondente — verifique o payload:`, JSON.stringify(data));
+        return res.status(200).json({ success: true, ignored: true });
+      }
+
+      const result = event === 'checkout.completed'
+        ? await grantProPass({
+          userId: row.userId,
+          paymentId: checkout.id,
+          days: pass.days,
+          amount: (checkout.paidAmount ?? checkout.amount) / 100,
+          label: pass.label,
+        })
+        : await revokeProPass({ userId: row.userId, paymentId: checkout.id, days: pass.days });
+
+      if (result.user) {
+        await upsertSubscription({
+          userId: row.userId,
+          providerCustomerId: row.providerCustomerId,
+          providerSubscriptionId: checkout.id,
+          status: result.user.plan === 'pro' ? 'pass_active' : 'none',
+        });
+        await syncLeaderboardEntry({
+          userId: row.userId,
+          name: result.user.name,
+          targetExam: result.user.targetExam || 'Polícia Federal',
+          city: result.user.city || 'Brasil',
+          questionsAnswered: 0,
+          streak: result.user.streak || 1,
+          xp: result.user.xp || 0,
+          plan: result.user.plan,
+        }).catch(() => {});
+      }
+      console.log(`[Payments] ${event} ${checkout.id} (${pass.label}) — usuário ${row.userId}: ${result.status}.`);
+      return res.status(200).json({ success: true, result: result.status });
     }
 
     // Outros tópicos (trial_started, etc.) — confirma recebimento sem agir.

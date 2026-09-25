@@ -14,6 +14,8 @@ export const users = pgTable('users', {
   whatsapp: text('whatsapp').default(''),
   plan: text('plan').default('free'),
   planPrice: text('plan_price').default('R$ 29,90'),
+  // Fim do passe PRO (pagamento avulso). NULL = PRO sem validade (assinatura).
+  proUntil: timestamp('pro_until', { withTimezone: true }),
   xp: integer('xp').default(0),
   streak: integer('streak').default(1),
   hearts: integer('hearts').default(5),

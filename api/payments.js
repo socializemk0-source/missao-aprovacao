@@ -1,6 +1,7 @@
 import { requireAuth } from '../middleware/requireAuth.js';
 import { createAbacatePayClient } from '../src/payments/abacatepay.js';
 import { getSubscriptionByUserId, upsertSubscription } from '../src/db/queries.js';
+import { billingMode, PASSES } from '../src/plan.js';
 
 // Ciclos vendidos. O cliente só escolhe o ciclo; produto e valor são
 // sempre decididos aqui (nunca vêm da requisição).
@@ -79,15 +80,20 @@ export default async function paymentsHandler(req, res, deps = {}) {
 
   const body = await readBody(req);
   const cycle = body?.cycle ?? 'monthly';
-  const plan = Object.hasOwn(PLANS, cycle) ? PLANS[cycle] : null;
-  if (!plan) {
+  if (!Object.hasOwn(PLANS, cycle)) {
     return res.status(400).json({ success: false, error: 'Plano inválido.' });
   }
+
+  // "subscription": assinatura recorrente (exige cartão ou PIX Automático
+  // liberados na loja). "pass": cobrança avulsa por PIX comum que dá 30 ou
+  // 365 dias de PRO (ABACATEPAY_BILLING_MODE=pass).
+  const mode = billingMode();
+  const plan = mode === 'pass' ? PASSES[cycle] : PLANS[cycle];
 
   const productId = process.env[plan.productEnv];
   if (!productId) {
     console.error(`[Payments] ${plan.productEnv} não configurado no servidor.`);
-    return res.status(503).json({ success: false, error: `Plano ${plan.label} indisponível no momento.` });
+    return res.status(503).json({ success: false, error: `Plano ${PLANS[cycle].label} indisponível no momento.` });
   }
 
   let client;
@@ -110,7 +116,8 @@ export default async function paymentsHandler(req, res, deps = {}) {
     // necessária pra cancelá-la — ela continuaria sendo cobrada sem
     // ninguém conseguir mais encontrá-la. Uma assinatura 'pending' (nunca
     // confirmada) não tem esse risco, então segue permitindo checkout novo.
-    if (existing?.status === 'active') {
+    // (No modo passe não há assinatura a perder: comprar de novo só soma dias.)
+    if (mode === 'subscription' && existing?.status === 'active') {
       return res.status(409).json({
         success: false,
         error: 'Você já tem uma assinatura PRO ativa.',
@@ -129,13 +136,15 @@ export default async function paymentsHandler(req, res, deps = {}) {
     }
 
     const baseUrl = resolveAppBaseUrl(req);
-    const subscription = await client.createSubscription({
+    const checkoutArgs = {
       productId,
       customerId,
       completionUrl: `${baseUrl}/?payment=success`,
       externalId: req.user.uid,
-      methods: subscriptionMethods(),
-    });
+    };
+    const subscription = mode === 'pass'
+      ? await client.createCheckout({ ...checkoutArgs, methods: ['PIX'] })
+      : await client.createSubscription({ ...checkoutArgs, methods: subscriptionMethods() });
 
     // Estado local otimista (pending) — o webhook subscription.completed
     // é quem confirma o pagamento de verdade e libera o PRO.

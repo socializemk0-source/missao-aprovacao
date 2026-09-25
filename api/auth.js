@@ -1,5 +1,6 @@
 import { requireAuth } from '../middleware/requireAuth.js';
 import { createAbacatePayClient } from '../src/payments/abacatepay.js';
+import { isProActive } from '../src/plan.js';
 import {
   getOrCreateUser,
   getUserByUid,
@@ -244,6 +245,12 @@ export default async function authHandler(req, res, deps = {}) {
           targetExam: 'Concursos Públicos',
           preferredBanca: 'Cebraspe',
         }).catch(() => profileRecord);
+      }
+
+      // Passe PRO vencido: volta para o grátis aqui mesmo (é a leitura de
+      // perfil que todo carregamento do app faz), sem depender de rotina agendada.
+      if (userRecord?.plan === 'pro' && !isProActive(userRecord)) {
+        userRecord = (await updateUser(req.user.uid, { plan: 'free', proUntil: null })) || { ...userRecord, plan: 'free', proUntil: null };
       }
 
       if (userRecord) delete userRecord.passwordHash;

@@ -54,9 +54,13 @@ function makeWebhookReq({ event, data }) {
 }
 
 function fakeAbacatePayClient({ customerId = 'cust_1', subscriptionId = 'bill_1', url = 'https://app.abacatepay.com/pay/bill_1' } = {}) {
-  const calls = { createCustomer: [], createSubscription: [], cancelSubscription: [] };
+  const calls = { createCustomer: [], createSubscription: [], cancelSubscription: [], createCheckout: [] };
   return {
     calls,
+    createCheckout: async (args) => {
+      calls.createCheckout.push(args);
+      return { id: 'bill_pass_1', url: 'https://app.abacatepay.com/pay/bill_pass_1' };
+    },
     createCustomer: async (args) => {
       calls.createCustomer.push(args);
       return { id: customerId };
@@ -447,4 +451,139 @@ test('webhook de assinatura anual grava o rótulo do plano como anual', async ()
   await webhookHandler(req, makeRes(), deps);
   assert.equal(store.users.user_A.plan, 'pro');
   assert.equal(store.users.user_A.planPrice, 'R$ 239,90/ano');
+});
+
+// ---------------------------------------------------------------------
+// Modo passe (ABACATEPAY_BILLING_MODE=pass): PIX avulso que dá 30 ou 365
+// dias de PRO, para lojas sem assinatura (cartão/PIX Automático) liberada.
+// ---------------------------------------------------------------------
+
+const DAY = 24 * 60 * 60 * 1000;
+
+function withPassMode(fn) {
+  return async () => {
+    process.env.ABACATEPAY_BILLING_MODE = 'pass';
+    process.env.ABACATEPAY_PASS_PRODUCT_ID = 'prod_passe_30';
+    process.env.ABACATEPAY_PASS_PRODUCT_ID_ANNUAL = 'prod_passe_365';
+    try {
+      await fn();
+    } finally {
+      delete process.env.ABACATEPAY_BILLING_MODE;
+      delete process.env.ABACATEPAY_PASS_PRODUCT_ID;
+      delete process.env.ABACATEPAY_PASS_PRODUCT_ID_ANNUAL;
+    }
+  };
+}
+
+function checkoutEvent(event, { checkoutId = 'bill_pass_1', productId = 'prod_passe_30', status = 'PAID', customerId = 'cust_1', externalId = 'user_A' } = {}) {
+  return makeWebhookReq({
+    event,
+    data: {
+      checkout: { id: checkoutId, externalId, amount: 2990, paidAmount: 2990, frequency: 'ONE_TIME', items: [{ id: productId, quantity: 1 }], status, methods: ['PIX'], customerId },
+      customer: { id: customerId },
+    },
+  });
+}
+
+test('passe: checkout cria cobrança PIX avulsa do produto de 30 dias (não cria assinatura)', withPassMode(async () => {
+  const client = fakeAbacatePayClient();
+  const res = makeRes();
+  await paymentsHandler(makeReq({ body: {}, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.checkoutUrl, 'https://app.abacatepay.com/pay/bill_pass_1');
+  assert.equal(client.calls.createSubscription.length, 0);
+  assert.equal(client.calls.createCheckout[0].productId, 'prod_passe_30');
+  assert.deepEqual(client.calls.createCheckout[0].methods, ['PIX']);
+  assert.equal(client.calls.createCheckout[0].externalId, 'user_A');
+}));
+
+test('passe: anual usa o produto de 365 dias; sem o produto configurado → 503', withPassMode(async () => {
+  let client = fakeAbacatePayClient();
+  await paymentsHandler(makeReq({ body: { cycle: 'annual' }, headers: authHeader('user_A') }), makeRes(), { abacatePayClient: client });
+  assert.equal(client.calls.createCheckout[0].productId, 'prod_passe_365');
+
+  delete process.env.ABACATEPAY_PASS_PRODUCT_ID_ANNUAL;
+  client = fakeAbacatePayClient();
+  const res = makeRes();
+  await paymentsHandler(makeReq({ body: { cycle: 'annual' }, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+  assert.equal(res.statusCode, 503);
+  assert.equal(client.calls.createCheckout.length, 0);
+}));
+
+test('passe: quem já tem passe ativo pode comprar mais tempo (sem 409)', withPassMode(async () => {
+  store.users.user_A.plan = 'pro';
+  store.users.user_A.proUntil = new Date(Date.now() + 5 * DAY);
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_antigo', status: 'pass_active' };
+  const client = fakeAbacatePayClient();
+  const res = makeRes();
+  await paymentsHandler(makeReq({ body: {}, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+  assert.equal(res.statusCode, 200);
+}));
+
+test('passe: checkout.completed pago dá 30 dias de PRO', withPassMode(async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pass_1', status: 'pending' };
+  const { req, deps } = checkoutEvent('checkout.completed');
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.users.user_A.plan, 'pro');
+  const days = (new Date(store.users.user_A.proUntil).getTime() - Date.now()) / DAY;
+  assert.ok(days > 29.9 && days <= 30, `dias: ${days}`);
+  assert.equal(store.users.user_A.planPrice, 'Passe PRO 30 dias');
+}));
+
+test('passe: o mesmo checkout.completed reenviado não dá dias em dobro', withPassMode(async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pass_1', status: 'pending' };
+  for (let i = 0; i < 2; i++) {
+    const { req, deps } = checkoutEvent('checkout.completed');
+    await webhookHandler(req, makeRes(), deps);
+  }
+  const days = (new Date(store.users.user_A.proUntil).getTime() - Date.now()) / DAY;
+  assert.ok(days <= 30, `dias: ${days}`);
+}));
+
+test('passe: comprar com dias sobrando soma ao que resta', withPassMode(async () => {
+  store.users.user_A.plan = 'pro';
+  store.users.user_A.proUntil = new Date(Date.now() + 10 * DAY);
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pass_1', status: 'pass_active' };
+  const { req, deps } = checkoutEvent('checkout.completed');
+  await webhookHandler(req, makeRes(), deps);
+  const days = (new Date(store.users.user_A.proUntil).getTime() - Date.now()) / DAY;
+  assert.ok(days > 39.9 && days <= 40, `dias: ${days}`);
+}));
+
+test('passe: produto desconhecido ou checkout não pago não dá PRO', withPassMode(async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pass_1', status: 'pending' };
+  for (const opts of [{ productId: 'prod_de_outra_coisa' }, { status: 'PENDING', checkoutId: 'bill_x' }]) {
+    const { req, deps } = checkoutEvent('checkout.completed', opts);
+    const res = makeRes();
+    await webhookHandler(req, res, deps);
+    assert.equal(res.statusCode, 200);
+  }
+  assert.notEqual(store.users.user_A.plan, 'pro');
+}));
+
+test('passe: checkout.refunded tira os dias daquele pagamento (e volta pro grátis se acabar)', withPassMode(async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pass_1', status: 'pending' };
+  let ev = checkoutEvent('checkout.completed');
+  await webhookHandler(ev.req, makeRes(), ev.deps);
+  assert.equal(store.users.user_A.plan, 'pro');
+
+  ev = checkoutEvent('checkout.refunded');
+  await webhookHandler(ev.req, makeRes(), ev.deps);
+  assert.equal(store.users.user_A.plan, 'free');
+
+  ev = checkoutEvent('checkout.refunded'); // reenvio do estorno não mexe de novo
+  await webhookHandler(ev.req, makeRes(), ev.deps);
+  assert.equal(store.users.user_A.plan, 'free');
+}));
+
+test('passe: voltar para o grátis não tenta cancelar assinatura na AbacatePay', async () => {
+  store.users.user_A.plan = 'pro';
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_1', providerSubscriptionId: 'bill_pass_1', status: 'pass_active' };
+  const client = fakeAbacatePayClient();
+  const res = makeRes();
+  await authHandler(makeReq({ body: { action: 'downgrade-to-free' }, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+  assert.equal(res.statusCode, 200);
+  assert.equal(client.calls.cancelSubscription.length, 0);
 });

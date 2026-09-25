@@ -56,6 +56,20 @@ export function createAbacatePayClient({ apiKey = process.env.ABACATEPAY_API_KEY
     });
   }
 
+  // Cobrança avulsa (produto SEM cycle) — usada no modo passe (PIX comum).
+  async function createCheckout({ productId, customerId, completionUrl, externalId, methods }) {
+    return request('/checkouts/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: [{ id: productId, quantity: 1 }],
+        customerId,
+        completionUrl,
+        externalId,
+        ...(methods ? { methods } : {}),
+      }),
+    });
+  }
+
   async function cancelSubscription(providerSubscriptionId) {
     return request('/subscriptions/cancel', {
       method: 'POST',
@@ -63,7 +77,7 @@ export function createAbacatePayClient({ apiKey = process.env.ABACATEPAY_API_KEY
     });
   }
 
-  return { createCustomer, createSubscription, cancelSubscription };
+  return { createCustomer, createSubscription, createCheckout, cancelSubscription };
 }
 
 // Valida o header X-Webhook-Signature de um webhook da AbacatePay.

@@ -70,3 +70,22 @@ test('2. get-profile chamado de novo para o mesmo uid não duplica nem apaga dad
   assert.equal(res.body.profile.name, 'Nome Escolhido Pelo Usuário');
   assert.equal(res.body.profile.plan, 'pro'); // autorrecuperação não pode resetar o plano PRO
 });
+
+test('3. get-profile com passe PRO vencido devolve e grava o plano grátis', async () => {
+  const uid = 'user_passe_vencido';
+  store.users[uid] = { uid, name: 'Aluno', plan: 'pro', proUntil: new Date(Date.now() - 1000) };
+  const req = makeReq({ method: 'POST', body: { action: 'get-profile' }, headers: authHeader(uid) });
+  const res = makeRes();
+  await authHandler(req, res);
+  assert.equal(res.body.profile.plan, 'free');
+  assert.equal(store.users[uid].plan, 'free');
+});
+
+test('4. get-profile com passe PRO válido continua PRO', async () => {
+  const uid = 'user_passe_ok';
+  store.users[uid] = { uid, name: 'Aluno', plan: 'pro', proUntil: new Date(Date.now() + 86400000) };
+  const req = makeReq({ method: 'POST', body: { action: 'get-profile' }, headers: authHeader(uid) });
+  const res = makeRes();
+  await authHandler(req, res);
+  assert.equal(res.body.profile.plan, 'pro');
+});

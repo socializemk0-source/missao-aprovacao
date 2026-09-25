@@ -9,6 +9,7 @@ import leaderboardHandler from './api/data/leaderboard.js';
 import paymentsHandler from './api/payments.js';
 import paymentsWebhookHandler from './api/payments/webhook.js';
 import supabaseConfigHandler from './api/config/supabase.js';
+import billingConfigHandler from './api/config/billing.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -125,6 +126,10 @@ app.post('/api/payments', apiGeneralLimiter, (req, res) => {
 // Configuração pública do Supabase Client para inicialização no navegador
 app.get('/api/config/supabase', apiGeneralLimiter, (req, res) => {
   supabaseConfigHandler(req, res);
+});
+
+app.get('/api/config/billing', apiGeneralLimiter, (req, res) => {
+  billingConfigHandler(req, res);
 });
 
 // 6. SPA main HTML routes (ensure the latest index.html is always served)
