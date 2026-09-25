@@ -20,6 +20,17 @@ function resolveAppBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
+// Métodos aceitos no checkout da assinatura (ex.: "PIX" ou "PIX,CARD").
+// Sem a variável, não mandamos nada e vale o padrão da AbacatePay (só
+// CARD) — que é recusado por lojas ainda sem cartão habilitado.
+function subscriptionMethods() {
+  const methods = (process.env.ABACATEPAY_SUBSCRIPTION_METHODS || '')
+    .split(',')
+    .map((m) => m.trim().toUpperCase())
+    .filter((m) => m === 'PIX' || m === 'CARD');
+  return methods.length ? [...new Set(methods)] : undefined;
+}
+
 /**
  * POST /api/payments — cria um checkout de ASSINATURA da AbacatePay para o
  * PLANO PRO (R$ 29,90/mês, recorrente), sempre vinculada ao usuário
@@ -94,6 +105,7 @@ export default async function paymentsHandler(req, res, deps = {}) {
       customerId,
       completionUrl: `${baseUrl}/?payment=success`,
       externalId: req.user.uid,
+      methods: subscriptionMethods(),
     });
 
     // Estado local otimista (pending) — o webhook subscription.completed

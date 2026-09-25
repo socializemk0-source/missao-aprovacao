@@ -361,3 +361,31 @@ test('subscription.completed no formato v2 da documentação → PRO e passa a g
   assert.equal(store.subscriptions.user_A.providerSubscriptionId, 'subs_tAFqDWBhcEYTjQh2K0ZYDHau');
   assert.equal(store.subscriptionPayments[0].providerPaymentId, 'char_xyz789');
 });
+
+// Assinaturas usam CARD por padrão na AbacatePay; lojas sem cartão
+// habilitado recusam ("CARD is not available for this store"). O método
+// passa a ser configurável por ABACATEPAY_SUBSCRIPTION_METHODS.
+test('checkout envia os métodos de ABACATEPAY_SUBSCRIPTION_METHODS (ex.: só PIX)', async () => {
+  process.env.ABACATEPAY_SUBSCRIPTION_METHODS = ' pix ';
+  try {
+    const client = fakeAbacatePayClient();
+    const res = makeRes();
+    await paymentsHandler(makeReq({ body: {}, headers: authHeader('user_A') }), res, { abacatePayClient: client });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(client.calls.createSubscription[0].methods, ['PIX']);
+  } finally {
+    delete process.env.ABACATEPAY_SUBSCRIPTION_METHODS;
+  }
+});
+
+test('sem ABACATEPAY_SUBSCRIPTION_METHODS (ou com valor inválido) não envia methods — vale o padrão da AbacatePay', async () => {
+  for (const value of [undefined, 'BOLETO, qualquer']) {
+    if (value === undefined) delete process.env.ABACATEPAY_SUBSCRIPTION_METHODS;
+    else process.env.ABACATEPAY_SUBSCRIPTION_METHODS = value;
+    const client = fakeAbacatePayClient();
+    await paymentsHandler(makeReq({ body: {}, headers: authHeader('user_A') }), makeRes(), { abacatePayClient: client });
+    assert.equal(client.calls.createSubscription[0].methods, undefined, `valor: ${value}`);
+    resetStore(store);
+  }
+  delete process.env.ABACATEPAY_SUBSCRIPTION_METHODS;
+});

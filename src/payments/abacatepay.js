@@ -43,7 +43,7 @@ export function createAbacatePayClient({ apiKey = process.env.ABACATEPAY_API_KEY
 
   // Cria o checkout de assinatura e devolve a URL de pagamento hospedada
   // pela AbacatePay para onde o usuário deve ser redirecionado.
-  async function createSubscription({ productId, customerId, completionUrl, externalId }) {
+  async function createSubscription({ productId, customerId, completionUrl, externalId, methods }) {
     return request('/subscriptions/create', {
       method: 'POST',
       body: JSON.stringify({
@@ -51,6 +51,7 @@ export function createAbacatePayClient({ apiKey = process.env.ABACATEPAY_API_KEY
         customerId,
         completionUrl,
         externalId,
+        ...(methods ? { methods } : {}),
       }),
     });
   }

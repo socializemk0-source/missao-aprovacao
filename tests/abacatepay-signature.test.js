@@ -81,3 +81,17 @@ test('cliente da AbacatePay chama os endpoints da API v2', async () => {
     'https://api.abacatepay.com/v2/subscriptions/cancel',
   ]);
 });
+
+test('createSubscription repassa methods no corpo só quando informado', async () => {
+  const { createAbacatePayClient } = await import('../src/payments/abacatepay.js');
+  const bodies = [];
+  const fetchImpl = async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'bill_1', url: 'https://pay' } }) };
+  };
+  const client = createAbacatePayClient({ apiKey: 'k', fetchImpl });
+  await client.createSubscription({ productId: 'prod_1', customerId: 'c', completionUrl: 'https://x', externalId: 'u', methods: ['PIX'] });
+  await client.createSubscription({ productId: 'prod_1', customerId: 'c', completionUrl: 'https://x', externalId: 'u' });
+  assert.deepEqual(bodies[0].methods, ['PIX']);
+  assert.equal('methods' in bodies[1], false);
+});
