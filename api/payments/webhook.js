@@ -30,10 +30,12 @@ async function getRawBody(req) {
 // identificar a assinatura/customer, sempre contra dados que NÓS mesmos
 // gravamos ao criar o checkout (nunca confiando em algo vindo só do corpo).
 async function resolveSubscriptionRow(data) {
-  const subscriptionId = data?.subscription?.id;
-  if (subscriptionId) {
-    const bySubId = await getSubscriptionByProviderSubscriptionId(subscriptionId);
-    if (bySubId) return bySubId;
+  // subscription.id (subs_...) é o id definitivo; checkout.id (bill_...) é
+  // o que gravamos ao criar o checkout, antes do primeiro webhook.
+  for (const id of [data?.subscription?.id, data?.checkout?.id]) {
+    if (!id) continue;
+    const byId = await getSubscriptionByProviderSubscriptionId(id);
+    if (byId) return byId;
   }
 
   const customerId = data?.customer?.id || data?.subscription?.customerId || data?.customerId;
@@ -42,7 +44,7 @@ async function resolveSubscriptionRow(data) {
     if (byCustomerId) return byCustomerId;
   }
 
-  const externalId = data?.subscription?.externalId || data?.checkout?.externalId || data?.externalId;
+  const externalId = data?.subscription?.externalId || data?.checkout?.externalId || data?.payment?.externalId || data?.externalId;
   if (externalId) {
     const byUserId = await getSubscriptionByUserId(externalId);
     if (byUserId) return byUserId;
