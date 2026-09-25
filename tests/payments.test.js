@@ -337,3 +337,27 @@ test('downgrade-to-free sem assinatura ativa não tenta chamar a AbacatePay', as
   assert.equal(client.calls.cancelSubscription.length, 0);
   assert.equal(store.users.user_A.plan, 'free');
 });
+
+// Payload copiado da documentação oficial (webhook v2, subscription.completed).
+// Logo após o checkout guardamos o bill_... como providerSubscriptionId; o
+// evento traz esse mesmo id em data.checkout.id e o subs_ definitivo em
+// data.subscription.id, que passa a ser o guardado (é ele que o cancel usa).
+test('subscription.completed no formato v2 da documentação → PRO e passa a guardar o subs_', async () => {
+  store.subscriptions.user_A = { userId: 'user_A', providerCustomerId: 'cust_outro', providerSubscriptionId: 'bill_jskd3TMfScHZDJe5NSZjTmQ4', status: 'pending' };
+  const data = {
+    subscription: { id: 'subs_tAFqDWBhcEYTjQh2K0ZYDHau', amount: 2990, currency: 'BRL', method: 'CARD', status: 'ACTIVE', frequency: 'MONTHLY', canceledAt: null, cancelPolicy: null, cancelledDueTo: null },
+    customer: { id: 'cust_def456', name: 'Maria Santos', email: 'maria@exemplo.com', taxId: '12.***.***/0001-**' },
+    payment: { id: 'char_xyz789', externalId: 'pedido-456', amount: 2990, paidAmount: 2990, platformFee: 100, status: 'PAID', methods: ['CARD'] },
+    checkout: { id: 'bill_jskd3TMfScHZDJe5NSZjTmQ4', externalId: null, amount: 2990, paidAmount: 2990, frequency: 'SUBSCRIPTION', status: 'PAID', customerId: 'cust_def456' },
+  };
+  const { req, deps } = makeWebhookReq({ event: 'subscription.completed', data });
+  const res = makeRes();
+  await webhookHandler(req, res, deps);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ignored, undefined, 'não pode ter sido ignorado');
+  assert.equal(store.users.user_A.plan, 'pro');
+  assert.equal(store.subscriptions.user_A.status, 'active');
+  assert.equal(store.subscriptions.user_A.providerSubscriptionId, 'subs_tAFqDWBhcEYTjQh2K0ZYDHau');
+  assert.equal(store.subscriptionPayments[0].providerPaymentId, 'char_xyz789');
+});

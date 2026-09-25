@@ -60,3 +60,24 @@ test('[segurança] verifyWebhookSecret: segredo errado é rejeitado', () => {
 test('[segurança] verifyWebhookSecret: segredo ausente na notificação é rejeitado', () => {
   assert.equal(verifyWebhookSecret({ receivedSecret: undefined, expectedSecret: 'segredo-123' }), false);
 });
+
+// A API atual da AbacatePay é a v2 (https://api.abacatepay.com/v2). Na v1 o
+// caminho de cliente é /customer/create e assinaturas nem existem — o
+// checkout falhava em qualquer chamada.
+test('cliente da AbacatePay chama os endpoints da API v2', async () => {
+  const { createAbacatePayClient } = await import('../src/payments/abacatepay.js');
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url);
+    return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'x', url: 'https://pay' } }) };
+  };
+  const client = createAbacatePayClient({ apiKey: 'k', fetchImpl });
+  await client.createCustomer({ email: 'a@a.com' });
+  await client.createSubscription({ productId: 'prod_1', customerId: 'cust_1', completionUrl: 'https://x', externalId: 'u1' });
+  await client.cancelSubscription('subs_1');
+  assert.deepEqual(urls, [
+    'https://api.abacatepay.com/v2/customers/create',
+    'https://api.abacatepay.com/v2/subscriptions/create',
+    'https://api.abacatepay.com/v2/subscriptions/cancel',
+  ]);
+});

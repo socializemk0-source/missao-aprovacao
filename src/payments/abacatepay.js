@@ -8,7 +8,8 @@
 
 import crypto from 'crypto';
 
-const ABACATEPAY_API_BASE = 'https://api.abacatepay.com/v1';
+// API v2: é onde ficam /customers/* e /subscriptions/* (a v1 não tem assinaturas).
+const ABACATEPAY_API_BASE = 'https://api.abacatepay.com/v2';
 
 export function createAbacatePayClient({ apiKey = process.env.ABACATEPAY_API_KEY, fetchImpl = fetch } = {}) {
   if (!apiKey) {
