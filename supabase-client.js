@@ -376,8 +376,8 @@ export function subscribeAuth(callback) {
 // preferência de checkout autenticada (o servidor usa req.user.uid — o
 // que a gente manda aqui não importa) e redireciona para lá. O plano só
 // muda de verdade quando o webhook confirmar o pagamento no servidor.
-export async function startProCheckout() {
-  const res = await authFetch('/api/payments', { method: 'POST', body: JSON.stringify({}) });
+export async function startProCheckout(cycle = 'monthly') {
+  const res = await authFetch('/api/payments', { method: 'POST', body: JSON.stringify({ cycle }) });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok || !payload.success || !payload.checkoutUrl) {
     throw new Error(payload.error || 'Não foi possível iniciar o pagamento. Tente novamente.');
@@ -398,9 +398,9 @@ export async function refreshPlanFromServer() {
   return payload?.profile || null;
 }
 
-export async function upgradeUserPlan(newPlan = 'pro') {
+export async function upgradeUserPlan(newPlan = 'pro', cycle = 'monthly') {
   if (newPlan === 'pro') {
-    return startProCheckout(); // navega para a AbacatePay — não retorna
+    return startProCheckout(cycle); // navega para a AbacatePay — não retorna
   }
 
   const res = await authFetch('/api/auth', {

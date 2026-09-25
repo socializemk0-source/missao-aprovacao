@@ -22,6 +22,12 @@
   const PLAN_CONFIG = {
     price: 'R$ 29,90',
     priceValue: 29.90,
+    // Valores só para exibição — quem decide o que é cobrado é o servidor
+    // (api/payments.js), a partir do ciclo escolhido.
+    cycles: {
+      monthly: { whole: '29', cents: ',90', period: '/ mês', subtext: 'Menos de R$ 1,00 por dia · cancele quando quiser' },
+      annual: { whole: '19', cents: ',99', period: '/ mês', subtext: 'R$ 239,90 cobrados por ano · economize R$ 118,90' },
+    },
     periodLabel: 'Assinatura Mensal · Cancele quando quiser',
     freeChapterLimit: 5, // Capítulos 1 a 5 no modo gratuito (índices 0 a 4)
     freeFeatures: {
@@ -109,12 +115,12 @@
     // página navega para fora — nada aqui "ativa" nada de fato; só o
     // webhook confirmado no servidor faz isso, ver api/payments.js).
     // Voltar para grátis: autosserviço direto, sem risco de segurança.
-    async setPlan(newPlan) {
+    async setPlan(newPlan, cycle = 'monthly') {
       if (newPlan === 'pro') {
         if (!window.MissaoFirebase || typeof window.MissaoFirebase.startProCheckout !== 'function') {
           throw new Error('Pagamento indisponível no momento. Tente novamente em instantes.');
         }
-        await window.MissaoFirebase.startProCheckout(); // navega para a AbacatePay
+        await window.MissaoFirebase.startProCheckout(cycle); // navega para a AbacatePay
         return true;
       }
 
@@ -163,7 +169,7 @@
               <div class="tico-plan-success-splash">
                 <div class="tico-success-icon">🎉👑</div>
                 <h2>Parabéns, Concurseiro PRO!</h2>
-                <p>Sua <strong>assinatura Passaporte Aprovação PRO (R$ 29,90/mês)</strong> foi confirmada e ativada.</p>
+                <p>Sua <strong>assinatura Passaporte Aprovação PRO</strong> foi confirmada e ativada.</p>
                 <div class="tico-success-unlocked-card">
                   <ul>
                     <li>✓ Vidas Infinitas (∞) desbloqueadas</li>
@@ -361,6 +367,10 @@
       if (!inner) return;
 
       const isPro = this.isPro();
+      const user = this.getUser();
+      if (!PLAN_CONFIG.cycles[this.selectedCycle]) this.selectedCycle = 'monthly';
+      const cycle = this.selectedCycle;
+      const cycleInfo = PLAN_CONFIG.cycles[cycle];
 
       inner.innerHTML = `
         <div class="tico-plan-modal-header">
@@ -375,7 +385,7 @@
             ${customMessage ? `<span class="tico-plan-custom-alert">${customMessage}</span><br>` : ''}
             ${isPro
               ? 'Sua assinatura está ativa: acesso ilimitado a todos os 37 capítulos, 111 fases e redações com IA.'
-              : 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por apenas <strong>R$ 29,90/mês</strong>.'}
+              : 'Treine sem limites de vidas, desbloqueie todo o edital e tenha correções de redação ilimitadas por <strong>R$ 29,90/mês</strong> ou <strong>R$ 239,90/ano</strong>.'}
           </p>
         </div>
 
@@ -406,13 +416,18 @@
             <div class="tico-pricing-card-head">
               <h3 class="tico-pricing-plan-name">PRO</h3>
               <p class="tico-pricing-plan-desc">Edital completo + redações ilimitadas com IA</p>
+              ${isPro ? '' : `
+              <div class="tico-cycle-toggle" role="group" aria-label="Período da assinatura">
+                <button type="button" data-cycle="monthly" aria-pressed="${cycle === 'monthly'}">Mensal</button>
+                <button type="button" data-cycle="annual" aria-pressed="${cycle === 'annual'}">Anual <span class="tico-cycle-save">-33%</span></button>
+              </div>`}
               <div class="tico-pricing-price-row">
                 <span class="tico-pricing-currency">R$</span>
-                <span class="tico-pricing-amount">29<span class="tico-pricing-cents">,90</span></span>
-                <span class="tico-pricing-period">/ mês</span>
+                <span class="tico-pricing-amount"><span data-price-whole>${cycleInfo.whole}</span><span class="tico-pricing-cents" data-price-cents>${cycleInfo.cents}</span></span>
+                <span class="tico-pricing-period">${cycleInfo.period}</span>
               </div>
-              <span class="tico-pricing-price-subtext">
-                ${isPro ? '✨ Assinatura ativa · renovação automática mensal' : 'Menos de R$ 1,00 por dia · cancele quando quiser'}
+              <span class="tico-pricing-price-subtext" data-price-subtext>
+                ${isPro ? `✨ Assinatura ativa${user?.planPrice ? ` · ${escapeHtml(user.planPrice)}` : ''}` : cycleInfo.subtext}
               </span>
             </div>
             <div class="tico-pricing-card-body">
@@ -433,12 +448,25 @@
         <!-- Rodapé: nota de segurança (não-PRO) ou confirmação (PRO) -->
         <div class="tico-plan-footer-section">
           ${isPro
-            ? `<p class="tico-plan-success-notice">✅ Sua assinatura PRO de R$ 29,90/mês está ativa nesta conta.</p>`
+            ? `<p class="tico-plan-success-notice">✅ Sua assinatura PRO está ativa nesta conta.</p>`
             : `<p class="tico-plan-security-note">
                 🔒 Pagamento seguro via AbacatePay (PIX ou cartão) · Garantia de 7 dias ou seu dinheiro de volta
               </p>`}
         </div>
       `;
+
+      inner.querySelectorAll('.tico-cycle-toggle button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const next = btn.dataset.cycle;
+          if (!PLAN_CONFIG.cycles[next]) return;
+          TicoPlan.selectedCycle = next;
+          const info = PLAN_CONFIG.cycles[next];
+          inner.querySelectorAll('.tico-cycle-toggle button').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+          inner.querySelector('[data-price-whole]').textContent = info.whole;
+          inner.querySelector('[data-price-cents]').textContent = info.cents;
+          inner.querySelector('[data-price-subtext]').textContent = info.subtext;
+        });
+      });
 
       // Botão Ativar PRO — redireciona para o checkout real da AbacatePay.
       const confirmBtn = inner.querySelector('#tico-confirm-pro-btn');
@@ -450,7 +478,7 @@
           const originalContent = confirmBtn.innerHTML;
           confirmBtn.innerHTML = '<span>Abrindo pagamento seguro...</span>';
           try {
-            await TicoPlan.setPlan('pro'); // navega para a AbacatePay (não retorna se der certo)
+            await TicoPlan.setPlan('pro', TicoPlan.selectedCycle); // navega para a AbacatePay (não retorna se der certo)
           } catch (err) {
             confirmBtn.disabled = false;
             confirmBtn.innerHTML = originalContent;
