@@ -9,9 +9,11 @@ DECLARE
   v_id_type text := 'uuid';
 BEGIN
   -- Detecta o tipo do id em auth.users (uuid no Supabase)
-  SELECT data_type INTO v_id_type
+  -- Atribuição (:=), não "SELECT ... INTO": o SQL Editor do Supabase confunde
+  -- com criação de tabela e quebra o script.
+  v_id_type := (SELECT data_type
   FROM information_schema.columns
-  WHERE table_schema = 'auth' AND table_name = 'users' AND column_name = 'id';
+  WHERE table_schema = 'auth' AND table_name = 'users' AND column_name = 'id');
 
   -- Se a tabela profiles não existe, cria com id vinculado a auth.users
   IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'profiles') THEN

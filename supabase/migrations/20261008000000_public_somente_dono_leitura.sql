@@ -52,13 +52,15 @@ BEGIN
     EXECUTE format('REVOKE ALL ON public.%I FROM authenticated', t.relname);
     EXECUTE format('GRANT SELECT ON public.%I TO authenticated', t.relname);
 
-    -- Coluna de dono
-    SELECT CASE
+    -- Coluna de dono. Atribuição (:=), não "SELECT ... INTO": o SQL Editor do
+    -- Supabase lê "SELECT ... INTO dono" como criação da tabela "dono" e enfia
+    -- um ALTER TABLE no meio do bloco, quebrando o script.
+    dono := CASE
              WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = t.relname AND column_name = 'user_id') THEN 'user_id'
              WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = t.relname AND column_name = 'uid') THEN 'uid'
              WHEN t.relname = 'profiles' AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = t.relname AND column_name = 'id') THEN 'id'
              ELSE NULL
-           END INTO dono;
+           END;
 
     IF dono IS NOT NULL THEN
       expr := format('((select auth.uid())::text = %I::text)', dono);
